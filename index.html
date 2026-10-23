@@ -114,10 +114,10 @@
         const WEEKDAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 
         const INITIAL_BUCKETS = [
-            { id: 'b-1', name: 'Morning', start: '0600', end: '0900', color: BUCKET_COLORS[0] },
-            { id: 'b-2', name: 'Midday', start: '1000', end: '1300', color: BUCKET_COLORS[1] },
-            { id: 'b-3', name: 'Afternoon', start: '1400', end: '1700', color: BUCKET_COLORS[2] },
-            { id: 'b-4', name: 'Night', start: '1800', end: '2100', color: BUCKET_COLORS[3] }
+            { id: 'b-1', name: 'Morning', start: '0600', end: '0900', color: BUCKET_COLORS[0], crewIds: ['c-001', 'c-002'] },
+            { id: 'b-2', name: 'Midday', start: '1000', end: '1300', color: BUCKET_COLORS[1], crewIds: ['c-002', 'c-003'] },
+            { id: 'b-3', name: 'Afternoon', start: '1400', end: '1700', color: BUCKET_COLORS[2], crewIds: ['c-001', 'c-003'] },
+            { id: 'b-4', name: 'Night', start: '1800', end: '2100', color: BUCKET_COLORS[3], crewIds: ['c-001', 'c-002', 'c-003'] }
         ];
 
         const INITIAL_CREWS = [
@@ -190,6 +190,12 @@
             const [s2, e2] = toRange(b);
             return Math.max(s1, s2) < Math.min(e1, e2);
         };
+        // Crews designated to a bucket; a bucket with none designated is open to every crew.
+        const designatedIds = (bucket, crews) => {
+            const ids = (bucket.crewIds || []).filter(id => crews.some(c => c.id === id));
+            return ids;
+        };
+
         const sortBuckets = (buckets) => [...buckets].sort((a, b) => timeToMins(a.start) - timeToMins(b.start));
 
         const noteKey = (date, bucketId, crewId) => `${date}|${bucketId}|${crewId}`;
@@ -376,11 +382,13 @@
             );
         };
 
-        const BucketForm = ({ initialData, onSave, onCancel }) => {
+        const BucketForm = ({ initialData, crews, onSave, onCancel }) => {
             const [name, setName] = useState(initialData?.name || '');
             const [start, setStart] = useState(initialData?.start ? formatMilTime(initialData.start) : '0800');
             const [end, setEnd] = useState(initialData?.end ? formatMilTime(initialData.end) : '1100');
             const [color, setColor] = useState(initialData?.color || BUCKET_COLORS[0]);
+            const [crewIds, setCrewIds] = useState(() => designatedIds(initialData || {}, crews));
+            const toggleCrew = (id) => setCrewIds(prev => prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id]);
 
             const validTime = (t) => /^\d{4}$/.test(t) && parseInt(t.slice(0, 2), 10) < 24 && parseInt(t.slice(2), 10) < 60;
             const canSave = name.trim() && validTime(start) && validTime(end) && start !== end;
@@ -388,7 +396,7 @@
             const handleSubmit = (e) => {
                 e.preventDefault();
                 if (!canSave) return;
-                onSave({ id: initialData?.id || generateId(), name: name.trim(), start, end, color });
+                onSave({ id: initialData?.id || generateId(), name: name.trim(), start, end, color, crewIds });
             };
 
             return (
@@ -415,6 +423,19 @@
                                 <button type="button" key={c} onClick={() => setColor(c)} aria-label={`Color ${c}`}
                                     className={`w-8 h-8 rounded-full border-2 ${color === c ? 'border-slate-900 scale-110' : 'border-white shadow'}`} style={{ backgroundColor: c }}></button>
                             ))}
+                        </div>
+                    </div>
+                    <div>
+                        <label className="block text-sm font-bold text-slate-700 mb-1">Crews in this bucket</label>
+                        <p className="text-xs text-slate-500 mb-2">These crews are tracked and compared against each other for this bucket. Leave all unselected to include every crew.</p>
+                        <div className="flex flex-wrap gap-2">
+                            {crews.map(c => (
+                                <button type="button" key={c.id} onClick={() => toggleCrew(c.id)} aria-pressed={crewIds.includes(c.id)}
+                                    className={`px-3 py-1 text-sm rounded-full border ${crewIds.includes(c.id) ? 'bg-blue-600 text-white border-blue-600 shadow-sm' : 'bg-white text-slate-600 border-slate-300 hover:bg-slate-50'}`}>
+                                    {c.crewName}
+                                </button>
+                            ))}
+                            {crews.length === 0 && <span className="text-xs text-slate-400 italic">Add crews on the Crews tab first.</span>}
                         </div>
                     </div>
                     <div className="flex justify-end gap-3 pt-4 border-t border-slate-200">
@@ -521,11 +542,14 @@
                     <div className="space-y-4">
                         <div>
                             <h3 className="text-lg font-bold text-slate-800">Breakdown by Bucket</h3>
-                            <p className="text-sm text-slate-500">How each crew compares to the others within each bucket, based only on flying logged in that bucket. Longest gap first.</p>
+                            <p className="text-sm text-slate-500">How each crew assigned to a bucket compares to the others in it, based only on flying logged in that bucket. Longest gap first. Assign crews on the Flying Buckets tab.</p>
                         </div>
                         <div className="grid grid-cols-1 xl:grid-cols-2 gap-6">
                             {sorted.map(b => {
-                                const rows = [...stats].sort((x, y) => {
+                                const designated = designatedIds(b, crews);
+                                const inBucket = designated.length ? stats.filter(r => designated.includes(r.crew.id)) : stats;
+                                const outsiders = designated.length ? stats.filter(r => !designated.includes(r.crew.id) && (r.perBucket[b.id] || 0) > 0) : [];
+                                const rows = [...inBucket].sort((x, y) => {
                                     const dx = x.daysSinceByBucket[b.id] ?? Infinity;
                                     const dy = y.daysSinceByBucket[b.id] ?? Infinity;
                                     if (dx !== dy) return dy - dx;
@@ -543,7 +567,7 @@
                                             <BucketDot color={b.color} />
                                             {b.name}
                                             <span className="font-mono text-xs text-slate-500 font-semibold">{formatMilTime(b.start)}-{formatMilTime(b.end)}</span>
-                                            <span className="ml-auto text-xs text-slate-500 font-semibold">avg {bAvg.toFixed(1)} / crew ({period}d)</span>
+                                            <span className="ml-auto text-xs text-slate-500 font-semibold">{designated.length ? `${designated.length} crews` : 'all crews'} · avg {bAvg.toFixed(1)} ({period}d)</span>
                                         </div>
                                         <table className="w-full text-left border-collapse">
                                             <thead>
@@ -582,6 +606,11 @@
                                                 {rows.length === 0 && <tr><td colSpan={3} className="p-6 text-center text-slate-400 text-sm">No crews yet.</td></tr>}
                                             </tbody>
                                         </table>
+                                        {outsiders.length > 0 && (
+                                            <div className="px-4 py-2 border-t border-slate-100 text-xs text-slate-500">
+                                                Also flew here ({period}d, not assigned): {outsiders.map(r => `${r.crew.crewName} (${r.perBucket[b.id]})`).join(', ')}
+                                            </div>
+                                        )}
                                     </div>
                                 );
                             })}
@@ -618,6 +647,14 @@
                         {sortBuckets(buckets).map(bucket => {
                             const assigned = dayLog[bucket.id] || [];
                             const available = orderedCrews.filter(s => !assigned.includes(s.crew.id));
+                            const designated = designatedIds(bucket, crews);
+                            const mine = available.filter(s => designated.includes(s.crew.id));
+                            const others = available.filter(s => !designated.includes(s.crew.id));
+                            const optionFor = (s) => (
+                                <option key={s.crew.id} value={s.crew.id}>
+                                    {s.crew.crewName} — {sinceLabel(s.daysSince)}, {s.sorties} in {period}d
+                                </option>
+                            );
                             return (
                                 <div key={bucket.id} className="border border-slate-200 rounded-xl overflow-hidden">
                                     <div className="px-3 py-2 flex items-center gap-2 text-sm font-bold text-slate-800" style={{ backgroundColor: bucket.color + '1a' }}>
@@ -671,11 +708,12 @@
                                                 className="w-full text-sm bg-white border border-slate-300 rounded-lg p-2 focus:ring-2 focus:ring-blue-500 outline-none"
                                             >
                                                 <option value="">+ Log crew (longest gap first)…</option>
-                                                {available.map(s => (
-                                                    <option key={s.crew.id} value={s.crew.id}>
-                                                        {s.crew.crewName} — {sinceLabel(s.daysSince)}, {s.sorties} in {period}d
-                                                    </option>
-                                                ))}
+                                                {designated.length === 0 ? available.map(optionFor) : (
+                                                    <>
+                                                        {mine.length > 0 && <optgroup label={`Assigned to ${bucket.name}`}>{mine.map(optionFor)}</optgroup>}
+                                                        {others.length > 0 && <optgroup label="Other crews">{others.map(optionFor)}</optgroup>}
+                                                    </>
+                                                )}
                                             </select>
                                             </>
                                         )}
@@ -938,6 +976,7 @@
                     isDanger: true,
                     onConfirm: () => {
                         setCrews(prev => prev.filter(c => c.id !== crew.id));
+                        setBuckets(prev => prev.map(b => b.crewIds ? { ...b, crewIds: b.crewIds.filter(id => id !== crew.id) } : b));
                         pruneLog((bucketId, id) => id !== crew.id);
                     }
                 });
@@ -1019,12 +1058,18 @@
                                     onAdd={() => setModalConfig({ isOpen: true, type: 'BUCKET', data: null })}
                                     onEdit={(b) => setModalConfig({ isOpen: true, type: 'BUCKET', data: b })}
                                     onDelete={handleDeleteBucket}
-                                    columns={['Bucket', 'Hours (Z)', 'Length']}
+                                    columns={['Bucket', 'Hours (Z)', 'Length', 'Crews']}
                                     renderRow={(b) => (
                                         <>
                                             <td className="p-4 font-black text-slate-800 text-base"><BucketDot color={b.color} className="mr-2" />{b.name}</td>
                                             <td className="p-4 text-sm font-mono font-semibold text-slate-600">{formatMilTime(b.start)} - {formatMilTime(b.end)}</td>
                                             <td className="p-4 text-sm text-slate-600">{bucketHours(b).toFixed(1)} h</td>
+                                            <td className="p-4">
+                                                <div className="flex gap-1 flex-wrap">
+                                                    {designatedIds(b, crews).length === 0 ? <span className="text-slate-400 text-xs italic">All crews</span> :
+                                                     designatedIds(b, crews).map(id => <span key={id} className="bg-slate-100 text-slate-700 text-[10px] font-bold px-2 py-0.5 rounded border border-slate-200 uppercase">{crews.find(c => c.id === id).crewName}</span>)}
+                                                </div>
+                                            </td>
                                         </>
                                     )}
                                 />
@@ -1076,6 +1121,7 @@
                         {modalConfig.type === 'BUCKET' && (
                             <BucketForm
                                 initialData={modalConfig.data}
+                                crews={crews}
                                 onCancel={closeModal}
                                 onSave={(newBucket) => {
                                     setBuckets(prev => modalConfig.data ? prev.map(b => b.id === newBucket.id ? newBucket : b) : [...prev, newBucket]);
