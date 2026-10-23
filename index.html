@@ -105,7 +105,7 @@
     <div id="root"></div>
 
     <script type="text/babel">
-        const { useState, useEffect, useMemo, useCallback } = React;
+        const { useState, useEffect, useMemo } = React;
 
         // --- CONSTANTS & SEED DATA ---
         const CREW_ROLES = ['Aircraft Commander (AC)', 'Pilot (P)', 'Boom Operator (BO)', 'Instructor (IP)', 'Instructor Boom (IB)'];
@@ -209,23 +209,6 @@
         // A Flying Log note that mentions "GAR" counts as that crew pulling the ground alert that day.
         const isGarNote = (text) => /\bGAR\b/i.test(text || '');
 
-        // Every GAR up to today: manually logged ones plus Flying Log entries whose note mentions "GAR".
-        const collectGarEntries = (crews, gar, notes, buckets, today) => {
-            const crewIds = new Set(crews.map(c => c.id));
-            const bucketNames = Object.fromEntries((buckets || []).map(b => [b.id, b.name]));
-            const list = [];
-            Object.entries(gar).forEach(([d, e]) => {
-                if (d <= today && crewIds.has(e.crewId)) list.push({ id: `m|${d}`, date: d, crewId: e.crewId, note: e.note || '', source: 'manual' });
-            });
-            Object.entries(notes || {}).forEach(([key, text]) => {
-                const [d, bucketId, crewId] = key.split('|');
-                if (!isGarNote(text) || d > today || !crewIds.has(crewId)) return;
-                if (list.some(x => x.date === d && x.crewId === crewId)) return; // already logged manually
-                list.push({ id: `n|${key}`, date: d, crewId, note: text, source: 'log', bucketName: bucketNames[bucketId] || '' });
-            });
-            return list.sort((a, b) => b.date.localeCompare(a.date));
-        };
-
         // GAR (24-hour ground alert) history: gar[date] = { crewId, note }. One crew per day.
         const buildSeedGar = () => {
             const t = todayStr();
@@ -286,11 +269,7 @@
         };
 
         // Longest gap first (never flown = top), then fewest sorties in the period, then name.
-        // Crews on GAR that day (onGar) can't fly, so they always sort below everyone else.
-        const rankByFairness = (stats, onGar = new Set()) => [...stats].sort((a, b) => {
-            const ga = onGar.has(a.crew.id) ? 1 : 0;
-            const gb = onGar.has(b.crew.id) ? 1 : 0;
-            if (ga !== gb) return ga - gb;
+        const rankByFairness = (stats) => [...stats].sort((a, b) => {
             const da = a.daysSince === null ? Infinity : a.daysSince;
             const db = b.daysSince === null ? Infinity : b.daysSince;
             if (da !== db) return db - da;
@@ -500,17 +479,16 @@
         };
 
         // --- VIEWS ---
-        const DashboardView = ({ crews, buckets, log, period, setPeriod, onUpdateCrew, garOn }) => {
+        const DashboardView = ({ crews, buckets, log, period, setPeriod, onUpdateCrew }) => {
             const today = todayStr();
-            const onGarToday = useMemo(() => garOn(today), [garOn, today]);
-            const stats = useMemo(() => rankByFairness(computeCrewStats(crews, buckets, log, today, true, period), onGarToday), [crews, buckets, log, period, today, onGarToday]);
+            const stats = useMemo(() => rankByFairness(computeCrewStats(crews, buckets, log, today, true, period)), [crews, buckets, log, period, today]);
             const sorted = sortBuckets(buckets);
 
             const totalSorties = stats.reduce((sum, s) => sum + s.sorties, 0);
             const avg = stats.length ? totalSorties / stats.length : 0;
             const maxSorties = Math.max(1, ...stats.map(s => s.sorties));
             const spread = stats.length ? Math.max(...stats.map(s => s.sorties)) - Math.min(...stats.map(s => s.sorties)) : 0;
-            const longestGap = stats.find(r => !onGarToday.has(r.crew.id)) || stats[0];
+            const longestGap = stats[0];
 
             return (
                 <div className="space-y-6">
@@ -544,7 +522,7 @@
 
                     <div className="bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden">
                         <div className="p-4 border-b border-slate-200 bg-slate-50 flex justify-between items-center">
-                            <h3 className="font-bold text-slate-700 uppercase tracking-wider text-sm">Crews by time since last flown <span className="normal-case font-semibold text-slate-400">· crews on GAR today go last</span></h3>
+                            <h3 className="font-bold text-slate-700 uppercase tracking-wider text-sm">Crews by time since last flown</h3>
                         </div>
                         <div className="overflow-x-auto">
                             <table className="w-full text-left border-collapse whitespace-nowrap">
@@ -565,7 +543,7 @@
                                         return (
                                             <tr key={s.crew.id} className="hover:bg-slate-50/80 transition-colors">
                                                 <td className="p-4 text-sm font-bold text-slate-400">{idx + 1}</td>
-                                                <td className="p-4 font-black text-slate-800">{s.crew.crewName}{onGarToday.has(s.crew.id) && <span className="ml-2 bg-blue-100 text-blue-700 border border-blue-200 text-[10px] font-bold px-1.5 py-0.5 rounded">ON GAR</span>}</td>
+                                                <td className="p-4 font-black text-slate-800">{s.crew.crewName}</td>
                                                 <td className="p-4">
                                                     <div className={`text-sm font-bold ${gapColor}`}>{sinceLabel(s.daysSince)}</div>
                                                     {s.last && <div className="text-xs text-slate-500 font-mono">{s.last}</div>}
@@ -606,9 +584,6 @@
                                 const inBucket = designated.length ? stats.filter(r => designated.includes(r.crew.id)) : stats;
                                 const outsiders = designated.length ? stats.filter(r => !designated.includes(r.crew.id) && (r.perBucket[b.id] || 0) > 0) : [];
                                 const rows = [...inBucket].sort((x, y) => {
-                                    const gx = onGarToday.has(x.crew.id) ? 1 : 0;
-                                    const gy = onGarToday.has(y.crew.id) ? 1 : 0;
-                                    if (gx !== gy) return gx - gy;
                                     const dx = x.daysSinceByBucket[b.id] ?? Infinity;
                                     const dy = y.daysSinceByBucket[b.id] ?? Infinity;
                                     if (dx !== dy) return dy - dx;
@@ -643,7 +618,7 @@
                                                     const diff = n - bAvg;
                                                     return (
                                                         <tr key={r.crew.id} className="hover:bg-slate-50/80">
-                                                            <td className="p-3 text-sm font-bold text-slate-800">{r.crew.crewName}{onGarToday.has(r.crew.id) && <span className="ml-2 bg-blue-100 text-blue-700 border border-blue-200 text-[10px] font-bold px-1.5 py-0.5 rounded">ON GAR</span>}</td>
+                                                            <td className="p-3 text-sm font-bold text-slate-800">{r.crew.crewName}</td>
                                                             <td className="p-3">
                                                                 <div className={`text-sm font-bold ${d === undefined || d >= 14 ? 'text-red-700' : d >= 7 ? 'text-amber-700' : 'text-slate-700'}`}>{d === undefined ? 'Never in this bucket' : sinceLabel(d)}</div>
                                                                 {r.lastByBucket[b.id] && <div className="text-xs text-slate-500 font-mono">{r.lastByBucket[b.id]}</div>}
@@ -680,14 +655,13 @@
             );
         };
 
-        const DayPanel = ({ date, crews, buckets, log, notes, period, garOn, onAdd, onRemove, onSetNote, onClose }) => {
+        const DayPanel = ({ date, crews, buckets, log, notes, period, onAdd, onRemove, onSetNote, onClose }) => {
             const [drafts, setDrafts] = useState({});
             const [editingKey, setEditingKey] = useState(null);
-            const onGarDay = useMemo(() => garOn(date), [garOn, date]);
             const stats = useMemo(() => {
-                const ranked = rankByFairness(computeCrewStats(crews, buckets, log, date, false, period), onGarDay);
+                const ranked = rankByFairness(computeCrewStats(crews, buckets, log, date, false, period));
                 return Object.fromEntries(ranked.map((s, i) => [s.crew.id, { ...s, rank: i }]));
-            }, [crews, buckets, log, date, period, onGarDay]);
+            }, [crews, buckets, log, date, period]);
             const orderedCrews = useMemo(() => Object.values(stats).sort((a, b) => a.rank - b.rank), [stats]);
             const dayLog = log[date] || {};
 
@@ -712,7 +686,7 @@
                             const others = available.filter(s => !designated.includes(s.crew.id));
                             const optionFor = (s) => (
                                 <option key={s.crew.id} value={s.crew.id}>
-                                    {s.crew.crewName} — {onGarDay.has(s.crew.id) ? 'on GAR, ' : ''}{sinceLabel(s.daysSince)}, {s.sorties} in {period}d
+                                    {s.crew.crewName} — {sinceLabel(s.daysSince)}, {s.sorties} in {period}d
                                 </option>
                             );
                             return (
@@ -767,7 +741,7 @@
                                                 }}
                                                 className="w-full text-sm bg-white border border-slate-300 rounded-lg p-2 focus:ring-2 focus:ring-blue-500 outline-none"
                                             >
-                                                <option value="">+ Log crew (longest gap first, GAR last)…</option>
+                                                <option value="">+ Log crew (longest gap first)…</option>
                                                 {designated.length === 0 ? available.map(optionFor) : (
                                                     <>
                                                         {mine.length > 0 && <optgroup label={`Assigned to ${bucket.name}`}>{mine.map(optionFor)}</optgroup>}
@@ -786,7 +760,7 @@
             );
         };
 
-        const CalendarView = ({ crews, buckets, log, period, setPeriod, selectedDate, setSelectedDate, onAdd, onRemove, notes, onSetNote, garOn }) => {
+        const CalendarView = ({ crews, buckets, log, period, setPeriod, selectedDate, setSelectedDate, onAdd, onRemove, notes, onSetNote }) => {
             const [cursor, setCursor] = useState(() => {
                 const [y, m] = (selectedDate || todayStr()).split('-').map(Number);
                 return { y, m: m - 1 };
@@ -871,7 +845,7 @@
 
                         <div className="xl:col-span-1">
                             {selectedDate ? (
-                                <DayPanel date={selectedDate} crews={crews} buckets={buckets} log={log} notes={notes} period={period} garOn={garOn} onAdd={onAdd} onRemove={onRemove} onSetNote={onSetNote} onClose={() => setSelectedDate(null)} />
+                                <DayPanel date={selectedDate} crews={crews} buckets={buckets} log={log} notes={notes} period={period} onAdd={onAdd} onRemove={onRemove} onSetNote={onSetNote} onClose={() => setSelectedDate(null)} />
                             ) : (
                                 <div className="bg-white rounded-xl shadow-sm border border-slate-200 p-8 text-center text-slate-400">
                                     <i className="fa-regular fa-calendar-check text-4xl mb-3"></i>
@@ -891,7 +865,22 @@
             const [crewId, setCrewId] = useState('');
             const [note, setNote] = useState('');
 
-            const entries = useMemo(() => collectGarEntries(crews, gar, notes, buckets, today), [crews, gar, notes, buckets, today]);
+            // Every GAR: manually logged ones plus Flying Log entries whose note mentions "GAR".
+            const entries = useMemo(() => {
+                const crewIds = new Set(crews.map(c => c.id));
+                const bucketNames = Object.fromEntries((buckets || []).map(b => [b.id, b.name]));
+                const list = [];
+                Object.entries(gar).forEach(([d, e]) => {
+                    if (d <= today && crewIds.has(e.crewId)) list.push({ id: `m|${d}`, date: d, crewId: e.crewId, note: e.note || '', source: 'manual' });
+                });
+                Object.entries(notes || {}).forEach(([key, text]) => {
+                    const [d, bucketId, crewId] = key.split('|');
+                    if (!isGarNote(text) || d > today || !crewIds.has(crewId)) return;
+                    if (list.some(x => x.date === d && x.crewId === crewId)) return; // already logged manually
+                    list.push({ id: `n|${key}`, date: d, crewId, note: text, source: 'log', bucketName: bucketNames[bucketId] || '' });
+                });
+                return list.sort((a, b) => b.date.localeCompare(a.date));
+            }, [crews, gar, notes, buckets, today]);
 
             // Up-next order as of today: never-done first, then longest since last GAR, then fewest total.
             const rotation = useMemo(() => {
@@ -902,6 +891,7 @@
                     r.total += 1;
                     if (!r.last || d > r.last) r.last = d;
                 });
+                // Whoever is on GAR today goes to the bottom of this order only.
                 const onToday = new Set(entries.filter(x => x.date === today).map(x => x.crewId));
                 return Object.values(byCrew).map(r => ({ ...r, daysSince: r.last ? daysBetween(r.last, today) : null })).sort((a, b) => {
                     const ga = onToday.has(a.crew.id) ? 1 : 0;
@@ -1219,10 +1209,6 @@
                 setIsDark(next);
                 try { localStorage.setItem('flyfair_theme', next ? 'dark' : 'light'); } catch (e) {}
             };
-            // Crews on GAR for a given day (manual log or a Flying Log note mentioning GAR).
-            const garEntries = useMemo(() => collectGarEntries(crews, gar, notes, buckets, todayStr()), [crews, gar, notes, buckets]);
-            const garOn = useCallback((date) => new Set(garEntries.filter(x => x.date === date).map(x => x.crewId)), [garEntries]);
-
             const handleUpdateCrew = (id, patch) => setCrews(prev => prev.map(c => c.id === id ? { ...c, ...patch } : c));
             const handleLogGar = (date, crewId, note) => {
                 if (date > todayStr()) return;
@@ -1278,8 +1264,8 @@
                     {/* Main Content */}
                     <main className="flex-1 overflow-y-auto p-4 md:p-8 relative">
                         <div className="max-w-7xl mx-auto h-full">
-                            {activeTab === 'dashboard' && <DashboardView crews={crews} buckets={buckets} log={log} period={period} setPeriod={setPeriod} onUpdateCrew={handleUpdateCrew} garOn={garOn} />}
-                            {activeTab === 'calendar' && <CalendarView crews={crews} buckets={buckets} log={log} period={period} setPeriod={setPeriod} selectedDate={selectedDate} setSelectedDate={setSelectedDate} onAdd={handleAddToBucket} onRemove={handleRemoveFromBucket} notes={notes} onSetNote={handleSetNote} garOn={garOn} />}
+                            {activeTab === 'dashboard' && <DashboardView crews={crews} buckets={buckets} log={log} period={period} setPeriod={setPeriod} onUpdateCrew={handleUpdateCrew} />}
+                            {activeTab === 'calendar' && <CalendarView crews={crews} buckets={buckets} log={log} period={period} setPeriod={setPeriod} selectedDate={selectedDate} setSelectedDate={setSelectedDate} onAdd={handleAddToBucket} onRemove={handleRemoveFromBucket} notes={notes} onSetNote={handleSetNote} />}
 
                             {activeTab === 'gar' && <GarView crews={crews} gar={gar} notes={notes} buckets={buckets} onLog={handleLogGar} onRemove={handleRemoveGar} />}
 
