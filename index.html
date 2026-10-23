@@ -742,7 +742,7 @@
                     <div className="p-4 border-b border-slate-200 bg-slate-50 flex justify-between items-center">
                         <div>
                             <h3 className="font-black text-slate-800">{prettyDate(date)}</h3>
-                            <p className="text-xs text-slate-500">{date === todayStr() ? 'Today' : 'Logged'} — gaps shown as of this day</p>
+                            <p className="text-xs text-slate-500">{date === todayStr() ? 'Today' : date > todayStr() ? 'Planned' : 'Logged'} — gaps shown as of this day{date > todayStr() ? '; planned days count toward stats once the day arrives' : ''}</p>
                         </div>
                         <button onClick={onClose} className="text-slate-400 hover:text-slate-700"><i className="fa-solid fa-xmark text-lg"></i></button>
                     </div>
@@ -863,7 +863,7 @@
                     <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
                         <div>
                             <h2 className="text-2xl font-bold text-slate-800">Flying Log</h2>
-                            <p className="text-sm text-slate-500 mt-1">Click a day to log which crews flew in each bucket. Future days can't be logged.</p>
+                            <p className="text-sm text-slate-500 mt-1">Click a day to log which crews flew in each bucket. Days after today are planned and only count toward the stats once they arrive.</p>
                         </div>
                         <PeriodToggle value={period} onChange={setPeriod} />
                     </div>
@@ -889,15 +889,15 @@
                                     const isSelected = date === selectedDate;
                                     const isFuture = date > today;
                                     return (
-                                        <button key={date} onClick={() => setSelectedDate(date)} disabled={isFuture}
-                                            className={`min-h-[90px] p-1.5 text-left border-b border-r border-slate-100 align-top transition-colors ${isFuture ? 'bg-slate-50/60 text-slate-300 cursor-not-allowed' : 'hover:bg-blue-50/60'} ${isSelected ? 'bg-blue-50 ring-2 ring-inset ring-blue-500' : ''}`}>
-                                            <div className={`text-xs font-bold mb-1 inline-flex items-center justify-center ${isToday ? 'bg-blue-600 text-white rounded-full w-6 h-6' : isFuture ? 'text-slate-300' : 'text-slate-600'}`}>{parseInt(date.slice(8), 10)}</div>
+                                        <button key={date} onClick={() => setSelectedDate(date)}
+                                            className={`min-h-[90px] p-1.5 text-left border-b border-r border-slate-100 align-top transition-colors ${isFuture ? 'bg-slate-50/60' : ''} hover:bg-blue-50/60 ${isSelected ? 'bg-blue-50 ring-2 ring-inset ring-blue-500' : ''}`}>
+                                            <div className={`text-xs font-bold mb-1 inline-flex items-center justify-center ${isToday ? 'bg-blue-600 text-white rounded-full w-6 h-6' : isFuture ? 'text-slate-400' : 'text-slate-600'}`}>{parseInt(date.slice(8), 10)}</div>
                                             <div className="space-y-0.5">
                                                 {sorted.map(b => {
                                                     const ids = (dayLog[b.id] || []).filter(id => crewMap[id]);
                                                     if (ids.length === 0) return null;
                                                     return (
-                                                        <div key={b.id} className="flex items-start gap-1 text-[10px] leading-tight text-slate-700">
+                                                        <div key={b.id} className={`flex items-start gap-1 text-[10px] leading-tight text-slate-700 ${isFuture ? 'italic' : ''}`}>
                                                             <BucketDot color={b.color} className="mt-0.5 !w-2 !h-2" />
                                                             <span className="truncate">{ids.map(id => crewMap[id].crewName.split(' ')[1] || crewMap[id].crewName).join(', ')}</span>
                                                         </div>
@@ -1333,11 +1333,7 @@
             const [activeTab, setActiveTab] = useState('dashboard');
             const [crews, setCrews] = useState(() => loadStored('flyfair_crews', INITIAL_CREWS));
             const [buckets, setBuckets] = useState(() => loadStored('flyfair_buckets', INITIAL_BUCKETS));
-            const [log, setLog] = useState(() => {
-                // Scheduling was removed: drop any future-dated entries saved by an earlier version.
-                const t = todayStr();
-                return Object.fromEntries(Object.entries(loadStored('flyfair_log', buildSeedLog())).filter(([date]) => date <= t));
-            });
+            const [log, setLog] = useState(() => loadStored('flyfair_log', buildSeedLog()));
             const [notes, setNotes] = useState(() => loadStored('flyfair_notes', {}));
             const [gar, setGar] = useState(() => loadStored('flyfair_gar', buildSeedGar()));
             const [period, setPeriod] = useState(() => loadStored('flyfair_period', 30));
@@ -1379,7 +1375,6 @@
                 });
             };
             const handleAddToBucket = (date, bucketId, crewId, note) => {
-                if (date > todayStr()) return;
                 if (note) handleSetNote(date, bucketId, crewId, note);
                 setLog(prev => {
                     const day = prev[date] || {};
