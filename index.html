@@ -163,7 +163,7 @@
             const bucketMap = Object.fromEntries(buckets.map(b => [b.id, b]));
             const windowStart = addDays(asOf, -periodDays);
             const stats = {};
-            crews.forEach(c => { stats[c.id] = { crew: c, last: null, sorties: 0, hours: 0, perBucket: {} }; });
+            crews.forEach(c => { stats[c.id] = { crew: c, last: null, sorties: 0, hours: 0, perBucket: {}, lastByBucket: {} }; });
 
             Object.entries(log).forEach(([date, byBucket]) => {
                 const counted = date < asOf || (includeAsOf && date === asOf);
@@ -175,6 +175,7 @@
                         if (!s) return;
                         if (counted) {
                             if (!s.last || date > s.last) s.last = date;
+                            if (!s.lastByBucket[bucketId] || date > s.lastByBucket[bucketId]) s.lastByBucket[bucketId] = date;
                             if (date > windowStart) {
                                 s.sorties += 1;
                                 s.hours += bucketHours(bucket);
@@ -187,7 +188,8 @@
 
             return Object.values(stats).map(s => ({
                 ...s,
-                daysSince: s.last ? daysBetween(s.last, asOf) : null
+                daysSince: s.last ? daysBetween(s.last, asOf) : null,
+                daysSinceByBucket: Object.fromEntries(Object.entries(s.lastByBucket).map(([id, d]) => [id, daysBetween(d, asOf)]))
             }));
         };
 
@@ -454,6 +456,77 @@
                         </div>
                     </div>
                     <p className="text-xs text-slate-500">The dark tick on each bar is the crew average. Amber/blue badges show crews at least one sortie above/below it.</p>
+
+                    <div className="space-y-4">
+                        <div>
+                            <h3 className="text-lg font-bold text-slate-800">Breakdown by Bucket</h3>
+                            <p className="text-sm text-slate-500">How each crew compares to the others within each bucket, based only on flying logged in that bucket. Longest gap first.</p>
+                        </div>
+                        <div className="grid grid-cols-1 xl:grid-cols-2 gap-6">
+                            {sorted.map(b => {
+                                const rows = [...stats].sort((x, y) => {
+                                    const dx = x.daysSinceByBucket[b.id] ?? Infinity;
+                                    const dy = y.daysSinceByBucket[b.id] ?? Infinity;
+                                    if (dx !== dy) return dy - dx;
+                                    const cx = x.perBucket[b.id] || 0;
+                                    const cy = y.perBucket[b.id] || 0;
+                                    if (cx !== cy) return cx - cy;
+                                    return x.crew.crewName.localeCompare(y.crew.crewName);
+                                });
+                                const counts = rows.map(r => r.perBucket[b.id] || 0);
+                                const bAvg = rows.length ? counts.reduce((a, c) => a + c, 0) / rows.length : 0;
+                                const bMax = Math.max(1, ...counts);
+                                return (
+                                    <div key={b.id} className="bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden">
+                                        <div className="px-4 py-3 border-b border-slate-200 flex items-center gap-2 font-bold text-slate-800" style={{ backgroundColor: b.color + '1a' }}>
+                                            <BucketDot color={b.color} />
+                                            {b.name}
+                                            <span className="font-mono text-xs text-slate-500 font-semibold">{formatMilTime(b.start)}-{formatMilTime(b.end)}</span>
+                                            <span className="ml-auto text-xs text-slate-500 font-semibold">avg {bAvg.toFixed(1)} / crew ({period}d)</span>
+                                        </div>
+                                        <table className="w-full text-left border-collapse">
+                                            <thead>
+                                                <tr className="bg-slate-50 border-b border-slate-200 text-slate-500 text-xs uppercase tracking-wider font-bold">
+                                                    <th className="p-3">Crew</th>
+                                                    <th className="p-3">Last in bucket</th>
+                                                    <th className="p-3">Sorties ({period}d)</th>
+                                                </tr>
+                                            </thead>
+                                            <tbody className="divide-y divide-slate-100">
+                                                {rows.map(r => {
+                                                    const n = r.perBucket[b.id] || 0;
+                                                    const d = r.daysSinceByBucket[b.id];
+                                                    const diff = n - bAvg;
+                                                    return (
+                                                        <tr key={r.crew.id} className="hover:bg-slate-50/80">
+                                                            <td className="p-3 text-sm font-bold text-slate-800">{r.crew.crewName}</td>
+                                                            <td className="p-3">
+                                                                <div className={`text-sm font-bold ${d === undefined || d >= 14 ? 'text-red-700' : d >= 7 ? 'text-amber-700' : 'text-slate-700'}`}>{d === undefined ? 'Never in this bucket' : sinceLabel(d)}</div>
+                                                                {r.lastByBucket[b.id] && <div className="text-xs text-slate-500 font-mono">{r.lastByBucket[b.id]}</div>}
+                                                            </td>
+                                                            <td className="p-3">
+                                                                <div className="flex items-center gap-2">
+                                                                    <div className="w-20 bg-slate-100 rounded-full h-2.5 overflow-hidden relative">
+                                                                        <div className="h-full transition-all duration-500" style={{ width: `${(n / bMax) * 100}%`, backgroundColor: b.color }}></div>
+                                                                        <div className="absolute top-0 h-full w-0.5 bg-slate-700" style={{ left: `${(bAvg / bMax) * 100}%` }} title="Bucket average"></div>
+                                                                    </div>
+                                                                    <span className="text-sm font-bold text-slate-800">{n}</span>
+                                                                    {diff >= 1 && <span className="text-xs text-amber-700 bg-amber-50 border border-amber-200 px-1.5 rounded font-bold">+{diff.toFixed(1)}</span>}
+                                                                    {diff <= -1 && <span className="text-xs text-blue-700 bg-blue-50 border border-blue-200 px-1.5 rounded font-bold">{diff.toFixed(1)}</span>}
+                                                                </div>
+                                                            </td>
+                                                        </tr>
+                                                    );
+                                                })}
+                                                {rows.length === 0 && <tr><td colSpan={3} className="p-6 text-center text-slate-400 text-sm">No crews yet.</td></tr>}
+                                            </tbody>
+                                        </table>
+                                    </div>
+                                );
+                            })}
+                            {sorted.length === 0 && <p className="text-sm text-slate-400">Create a flying bucket to see this breakdown.</p>}
+                        </div>
+                    </div>
                 </div>
             );
         };
