@@ -77,6 +77,7 @@
         html.dark .border-white { border-color: #131d30; }
 
         html.dark .bg-blue-50 { background-color: rgba(59,130,246,.16); }
+        html.dark .bg-blue-50\/50 { background-color: rgba(59,130,246,.1); }
         html.dark .bg-blue-100 { background-color: rgba(59,130,246,.22); }
         html.dark .bg-red-100 { background-color: rgba(239,68,68,.2); }
         html.dark .bg-amber-50 { background-color: rgba(245,158,11,.14); }
@@ -174,11 +175,6 @@
             const str = formatMilTime(timeStr);
             return (parseInt(str.substring(0, 2), 10) || 0) * 60 + (parseInt(str.substring(2, 4), 10) || 0);
         };
-        const bucketHours = (b) => {
-            let diff = timeToMins(b.end) - timeToMins(b.start);
-            if (diff <= 0) diff += 24 * 60;
-            return diff / 60;
-        };
         const bucketsOverlap = (a, b) => {
             const toRange = (x) => {
                 const s = timeToMins(x.start);
@@ -210,6 +206,16 @@
         };
 
         // Seed history relative to today so the demo always looks current.
+        // GAR (24-hour ground alert) history: gar[date] = { crewId, note }. One crew per day.
+        const buildSeedGar = () => {
+            const t = todayStr();
+            return {
+                [addDays(t, -17)]: { crewId: 'c-003', note: '' },
+                [addDays(t, -10)]: { crewId: 'c-002', note: '' },
+                [addDays(t, -5)]: { crewId: 'c-001', note: '' }
+            };
+        };
+
         const buildSeedLog = () => {
             const t = todayStr();
             const entry = (offset, bucketId, crewIds) => [addDays(t, offset), { [bucketId]: crewIds }];
@@ -230,7 +236,7 @@
             const bucketMap = Object.fromEntries(buckets.map(b => [b.id, b]));
             const windowStart = addDays(asOf, -periodDays);
             const stats = {};
-            crews.forEach(c => { stats[c.id] = { crew: c, last: null, sorties: 0, hours: 0, perBucket: {}, lastByBucket: {} }; });
+            crews.forEach(c => { stats[c.id] = { crew: c, last: null, sorties: 0, perBucket: {}, lastByBucket: {} }; });
 
             Object.entries(log).forEach(([date, byBucket]) => {
                 const counted = date < asOf || (includeAsOf && date === asOf);
@@ -245,7 +251,6 @@
                             if (!s.lastByBucket[bucketId] || date > s.lastByBucket[bucketId]) s.lastByBucket[bucketId] = date;
                             if (date > windowStart) {
                                 s.sorties += 1;
-                                s.hours += bucketHours(bucket);
                                 s.perBucket[bucketId] = (s.perBucket[bucketId] || 0) + 1;
                             }
                         }
@@ -414,7 +419,7 @@
                             <label className="block text-sm font-bold text-slate-700 mb-1">End (HHMM)</label>
                             <input type="text" value={end} onChange={e => setEnd(e.target.value.replace(/\D/g, '').slice(0, 4))} placeholder="1100" className="w-full border border-slate-300 rounded-lg p-2 focus:ring-2 focus:ring-blue-500 outline-none font-mono" />
                         </div>
-                        <p className="col-span-2 text-xs text-slate-500">An end time earlier than the start wraps past midnight. A bucket's length counts as Planned ATO Hours each time a crew is logged in it.</p>
+                        <p className="col-span-2 text-xs text-slate-500">An end time earlier than the start wraps past midnight.</p>
                     </div>
                     <div>
                         <label className="block text-sm font-bold text-slate-700 mb-2">Color</label>
@@ -446,8 +451,32 @@
             );
         };
 
+
+        // Manually entered 30-day flying time for a crew, stamped with the date it is current as of.
+        const Time30Input = ({ crew, onUpdate }) => {
+            const t = crew.time30 || { hours: '', asOf: '' };
+            const today = todayStr();
+            const age = t.asOf ? daysBetween(t.asOf, today) : null;
+            const setField = (field, value) => {
+                const next = { ...t, [field]: value };
+                if (field === 'hours' && value !== '' && !next.asOf) next.asOf = today;
+                onUpdate(crew.id, { time30: next });
+            };
+            return (
+                <div className="flex flex-wrap items-center gap-2">
+                    <input type="number" min="0" step="0.1" inputMode="decimal" value={t.hours} placeholder="hrs"
+                        onChange={e => setField('hours', e.target.value)} aria-label={`${crew.crewName} 30-day hours`}
+                        className="w-20 text-sm font-mono border border-slate-300 rounded-lg p-1.5 focus:ring-2 focus:ring-blue-500 outline-none" />
+                    <span className="text-xs text-slate-500 font-semibold">as of</span>
+                    <input type="date" max={today} value={t.asOf} onChange={e => setField('asOf', e.target.value)} aria-label={`${crew.crewName} 30-day time as-of date`}
+                        className="text-sm border border-slate-300 rounded-lg p-1.5 focus:ring-2 focus:ring-blue-500 outline-none" />
+                    {age !== null && age > 0 && <span className={`text-xs font-bold ${age > 7 ? 'text-amber-700' : 'text-slate-500'}`}>{age}d old</span>}
+                </div>
+            );
+        };
+
         // --- VIEWS ---
-        const DashboardView = ({ crews, buckets, log, period, setPeriod }) => {
+        const DashboardView = ({ crews, buckets, log, period, setPeriod, onUpdateCrew }) => {
             const today = todayStr();
             const stats = useMemo(() => rankByFairness(computeCrewStats(crews, buckets, log, today, true, period)), [crews, buckets, log, period, today]);
             const sorted = sortBuckets(buckets);
@@ -500,7 +529,7 @@
                                         <th className="p-4">Crew</th>
                                         <th className="p-4">Last Flown</th>
                                         <th className="p-4 min-w-[180px]">Sorties ({period}d)</th>
-                                        <th className="p-4">Planned ATO Hours</th>
+                                        <th className="p-4 min-w-[230px]">30-Day Time (manual)</th>
                                         {sorted.map(b => <th key={b.id} className="p-4"><BucketDot color={b.color} className="mr-1" />{b.name}</th>)}
                                     </tr>
                                 </thead>
@@ -527,7 +556,9 @@
                                                         {diff <= -1 && <span className="text-xs text-blue-700 bg-blue-50 border border-blue-200 px-1.5 rounded font-bold">{diff.toFixed(1)}</span>}
                                                     </div>
                                                 </td>
-                                                <td className="p-4 text-sm font-mono text-slate-600">{s.hours.toFixed(1)}</td>
+                                                <td className="p-4">
+                                                    <Time30Input crew={s.crew} onUpdate={onUpdateCrew} />
+                                                </td>
                                                 {sorted.map(b => <td key={b.id} className="p-4 text-sm text-slate-600">{s.perBucket[b.id] || 0}</td>)}
                                             </tr>
                                         );
@@ -824,6 +855,153 @@
             );
         };
 
+
+        const GarView = ({ crews, gar, onLog, onRemove }) => {
+            const today = todayStr();
+            const [date, setDate] = useState(today);
+            const [crewId, setCrewId] = useState('');
+            const [note, setNote] = useState('');
+
+            // Rotation order as of today: never-done first, then longest since last GAR, then fewest total.
+            const rotation = useMemo(() => {
+                const byCrew = Object.fromEntries(crews.map(c => [c.id, { crew: c, last: null, total: 0 }]));
+                Object.entries(gar).forEach(([d, e]) => {
+                    const r = byCrew[e.crewId];
+                    if (!r || d > today) return;
+                    r.total += 1;
+                    if (!r.last || d > r.last) r.last = d;
+                });
+                return Object.values(byCrew).map(r => ({ ...r, daysSince: r.last ? daysBetween(r.last, today) : null })).sort((a, b) => {
+                    const da = a.daysSince === null ? Infinity : a.daysSince;
+                    const db = b.daysSince === null ? Infinity : b.daysSince;
+                    if (da !== db) return db - da;
+                    if (a.total !== b.total) return a.total - b.total;
+                    return a.crew.crewName.localeCompare(b.crew.crewName);
+                });
+            }, [crews, gar, today]);
+
+            const history = useMemo(() => Object.entries(gar).filter(([d]) => d <= today).sort((a, b) => b[0].localeCompare(a[0])), [gar, today]);
+            const crewMap = Object.fromEntries(crews.map(c => [c.id, c]));
+            const onAlert = gar[today] && crewMap[gar[today].crewId];
+            const nextUp = rotation[0];
+            const existing = gar[date];
+            const maxTotal = Math.max(1, ...rotation.map(r => r.total));
+
+            const submit = (e) => {
+                e.preventDefault();
+                if (!crewId || !date || date > today) return;
+                onLog(date, crewId, note.trim());
+                setNote('');
+            };
+
+            return (
+                <div className="space-y-6">
+                    <div>
+                        <h2 className="text-2xl font-bold text-slate-800">Ground Alert (GAR)</h2>
+                        <p className="text-sm text-slate-500 mt-1">Every crew rotates through a 24-hour ground alert. The crew that has gone longest without one is next up.</p>
+                    </div>
+
+                    <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                        <div className="bg-white p-5 rounded-xl shadow-sm border border-slate-100">
+                            <p className="text-sm font-medium text-slate-500">On GAR Today</p>
+                            <h3 className="text-xl font-bold text-slate-800 mt-1">{onAlert ? onAlert.crewName : 'None logged'}</h3>
+                        </div>
+                        <div className="bg-white p-5 rounded-xl shadow-sm border border-slate-100">
+                            <p className="text-sm font-medium text-slate-500">Next Up</p>
+                            <h3 className="text-xl font-bold text-blue-700 mt-1">{nextUp ? nextUp.crew.crewName : '—'}</h3>
+                            <p className="text-xs text-slate-500 mt-1">{nextUp ? (nextUp.last ? `Last GAR ${sinceLabel(nextUp.daysSince)}` : 'Has not done a GAR') : 'Add a crew to begin'}</p>
+                        </div>
+                        <div className="bg-white p-5 rounded-xl shadow-sm border border-slate-100">
+                            <p className="text-sm font-medium text-slate-500">GARs Logged</p>
+                            <h3 className="text-3xl font-bold text-slate-800 mt-1">{history.length}</h3>
+                        </div>
+                    </div>
+
+                    <div className="grid grid-cols-1 xl:grid-cols-3 gap-6 items-start">
+                        <div className="xl:col-span-2 bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden">
+                            <div className="p-4 border-b border-slate-200 bg-slate-50">
+                                <h3 className="font-bold text-slate-700 uppercase tracking-wider text-sm">Rotation — next up first</h3>
+                            </div>
+                            <div className="overflow-x-auto">
+                                <table className="w-full text-left border-collapse whitespace-nowrap">
+                                    <thead>
+                                        <tr className="bg-slate-50 border-b border-slate-200 text-slate-500 text-xs uppercase tracking-wider font-bold">
+                                            <th className="p-4">#</th>
+                                            <th className="p-4">Crew</th>
+                                            <th className="p-4">Last GAR</th>
+                                            <th className="p-4">Total GARs</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody className="divide-y divide-slate-100">
+                                        {rotation.map((r, idx) => (
+                                            <tr key={r.crew.id} className={idx === 0 ? 'bg-blue-50/50' : ''}>
+                                                <td className="p-4 text-sm font-bold text-slate-400">{idx + 1}</td>
+                                                <td className="p-4 font-black text-slate-800">
+                                                    {r.crew.crewName}
+                                                    {idx === 0 && <span className="ml-2 bg-blue-600 text-white text-[10px] uppercase font-bold px-2 py-0.5 rounded">Next up</span>}
+                                                </td>
+                                                <td className="p-4">
+                                                    <div className={`text-sm font-bold ${r.daysSince === null ? 'text-red-700' : r.daysSince >= 14 ? 'text-amber-700' : 'text-slate-700'}`}>{r.last ? sinceLabel(r.daysSince) : 'Never'}</div>
+                                                    {r.last && <div className="text-xs text-slate-500 font-mono">{r.last}</div>}
+                                                </td>
+                                                <td className="p-4">
+                                                    <div className="flex items-center gap-3">
+                                                        <div className="w-24 bg-slate-100 rounded-full h-2.5 overflow-hidden"><div className="bg-indigo-500 h-full" style={{ width: `${(r.total / maxTotal) * 100}%` }}></div></div>
+                                                        <span className="text-sm font-bold text-slate-800">{r.total}</span>
+                                                    </div>
+                                                </td>
+                                            </tr>
+                                        ))}
+                                        {rotation.length === 0 && <tr><td colSpan={4} className="p-8 text-center text-slate-400">No crews yet.</td></tr>}
+                                    </tbody>
+                                </table>
+                            </div>
+                        </div>
+
+                        <div className="space-y-6">
+                            <form onSubmit={submit} className="bg-white rounded-xl shadow-sm border border-slate-200 p-4 space-y-3">
+                                <h3 className="font-bold text-slate-700 uppercase tracking-wider text-sm">Log a GAR</h3>
+                                <div>
+                                    <label className="block text-xs font-bold text-slate-600 mb-1">Date</label>
+                                    <input type="date" required max={today} value={date} onChange={e => setDate(e.target.value)}
+                                        className="w-full text-sm border border-slate-300 rounded-lg p-2 focus:ring-2 focus:ring-blue-500 outline-none" />
+                                </div>
+                                <div>
+                                    <label className="block text-xs font-bold text-slate-600 mb-1">Crew</label>
+                                    <select required value={crewId} onChange={e => setCrewId(e.target.value)}
+                                        className="w-full text-sm border border-slate-300 rounded-lg p-2 focus:ring-2 focus:ring-blue-500 outline-none">
+                                        <option value="">Select crew (next up first)…</option>
+                                        {rotation.map(r => <option key={r.crew.id} value={r.crew.id}>{r.crew.crewName} — {r.last ? sinceLabel(r.daysSince) : 'never'}, {r.total} total</option>)}
+                                    </select>
+                                </div>
+                                <input type="text" maxLength={200} value={note} onChange={e => setNote(e.target.value)} placeholder="Note (optional)"
+                                    className="w-full text-sm border border-slate-300 rounded-lg p-2 focus:ring-2 focus:ring-blue-500 outline-none" />
+                                {existing && crewMap[existing.crewId] && <p className="text-xs text-amber-700 font-semibold"><i className="fa-solid fa-triangle-exclamation mr-1"></i>{crewMap[existing.crewId].crewName} is already logged for this date; logging again replaces it.</p>}
+                                <button type="submit" disabled={!crewId || !date || date > today} className="w-full py-2 rounded-lg font-bold text-sm text-white bg-blue-600 hover:bg-blue-700 disabled:bg-slate-300">{existing ? 'Replace GAR' : 'Log GAR'}</button>
+                            </form>
+
+                            <div className="bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden">
+                                <div className="p-4 border-b border-slate-200 bg-slate-50"><h3 className="font-bold text-slate-700 uppercase tracking-wider text-sm">History</h3></div>
+                                <div className="divide-y divide-slate-100 max-h-[320px] overflow-y-auto">
+                                    {history.length === 0 && <p className="p-6 text-center text-sm text-slate-400">No GARs logged yet.</p>}
+                                    {history.map(([d, e]) => (
+                                        <div key={d} className="px-4 py-3 flex items-center justify-between gap-2">
+                                            <div className="min-w-0">
+                                                <div className="text-sm font-bold text-slate-800 truncate">{crewMap[e.crewId]?.crewName || 'Unknown crew'}</div>
+                                                <div className="text-xs text-slate-500 font-mono">{prettyDate(d)}</div>
+                                                {e.note && <div className="text-xs text-slate-600 italic">{e.note}</div>}
+                                            </div>
+                                            <button onClick={() => onRemove(d)} className="text-slate-400 hover:text-red-600 p-1" title="Remove"><i className="fa-solid fa-trash"></i></button>
+                                        </div>
+                                    ))}
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            );
+        };
+
         const SimpleListView = ({ title, items, columns, renderRow, icon, onAdd, onEdit, onDelete }) => (
             <div className="space-y-6">
                 <div className="flex justify-between items-center">
@@ -874,6 +1052,7 @@
                 return Object.fromEntries(Object.entries(loadStored('flyfair_log', buildSeedLog())).filter(([date]) => date <= t));
             });
             const [notes, setNotes] = useState(() => loadStored('flyfair_notes', {}));
+            const [gar, setGar] = useState(() => loadStored('flyfair_gar', buildSeedGar()));
             const [period, setPeriod] = useState(() => loadStored('flyfair_period', 30));
             const [selectedDate, setSelectedDate] = useState(todayStr());
 
@@ -891,6 +1070,7 @@
                         localStorage.setItem('flyfair_buckets', JSON.stringify(buckets));
                         localStorage.setItem('flyfair_log', JSON.stringify(log));
                         localStorage.setItem('flyfair_notes', JSON.stringify(notes));
+                        localStorage.setItem('flyfair_gar', JSON.stringify(gar));
                         localStorage.setItem('flyfair_period', JSON.stringify(period));
                         setSaveStatus('Saved Offline');
                     } catch (e) {
@@ -899,7 +1079,7 @@
                     clearTimer = setTimeout(() => setSaveStatus(''), 2000);
                 }, 500);
                 return () => { clearTimeout(timer); clearTimeout(clearTimer); };
-            }, [crews, buckets, log, notes, period]);
+            }, [crews, buckets, log, notes, gar, period]);
 
             // log[date][bucketId] = [crewId, ...]; empty buckets and days are pruned.
             const handleSetNote = (date, bucketId, crewId, text) => {
@@ -963,6 +1143,7 @@
                         setBuckets(INITIAL_BUCKETS);
                         setLog(buildSeedLog());
                         setNotes({});
+                        setGar(buildSeedGar());
                         setPeriod(30);
                     }
                 });
@@ -976,6 +1157,7 @@
                     isDanger: true,
                     onConfirm: () => {
                         setCrews(prev => prev.filter(c => c.id !== crew.id));
+                        setGar(prev => Object.fromEntries(Object.entries(prev).filter(([, e]) => e.crewId !== crew.id)));
                         setBuckets(prev => prev.map(b => b.crewIds ? { ...b, crewIds: b.crewIds.filter(id => id !== crew.id) } : b));
                         pruneLog((bucketId, id) => id !== crew.id);
                     }
@@ -1001,11 +1183,18 @@
                 setIsDark(next);
                 try { localStorage.setItem('flyfair_theme', next ? 'dark' : 'light'); } catch (e) {}
             };
+            const handleUpdateCrew = (id, patch) => setCrews(prev => prev.map(c => c.id === id ? { ...c, ...patch } : c));
+            const handleLogGar = (date, crewId, note) => {
+                if (date > todayStr()) return;
+                setGar(prev => ({ ...prev, [date]: { crewId, note } }));
+            };
+            const handleRemoveGar = (date) => setGar(prev => { const next = { ...prev }; delete next[date]; return next; });
             const closeModal = () => setModalConfig({ isOpen: false, type: null, data: null });
 
             const tabs = [
                 { id: 'dashboard', label: 'Fairness', icon: 'fa-scale-balanced' },
                 { id: 'calendar', label: 'Flying Log', icon: 'fa-calendar-days' },
+                { id: 'gar', label: 'Ground Alert (GAR)', icon: 'fa-bell' },
                 { id: 'buckets', label: 'Flying Buckets', icon: 'fa-clock' },
                 { id: 'crews', label: 'Crews', icon: 'fa-users' }
             ];
@@ -1049,8 +1238,10 @@
                     {/* Main Content */}
                     <main className="flex-1 overflow-y-auto p-4 md:p-8 relative">
                         <div className="max-w-7xl mx-auto h-full">
-                            {activeTab === 'dashboard' && <DashboardView crews={crews} buckets={buckets} log={log} period={period} setPeriod={setPeriod} />}
+                            {activeTab === 'dashboard' && <DashboardView crews={crews} buckets={buckets} log={log} period={period} setPeriod={setPeriod} onUpdateCrew={handleUpdateCrew} />}
                             {activeTab === 'calendar' && <CalendarView crews={crews} buckets={buckets} log={log} period={period} setPeriod={setPeriod} selectedDate={selectedDate} setSelectedDate={setSelectedDate} onAdd={handleAddToBucket} onRemove={handleRemoveFromBucket} notes={notes} onSetNote={handleSetNote} />}
+
+                            {activeTab === 'gar' && <GarView crews={crews} gar={gar} onLog={handleLogGar} onRemove={handleRemoveGar} />}
 
                             {activeTab === 'buckets' && (
                                 <SimpleListView
@@ -1058,12 +1249,11 @@
                                     onAdd={() => setModalConfig({ isOpen: true, type: 'BUCKET', data: null })}
                                     onEdit={(b) => setModalConfig({ isOpen: true, type: 'BUCKET', data: b })}
                                     onDelete={handleDeleteBucket}
-                                    columns={['Bucket', 'Hours (Z)', 'Length', 'Crews']}
+                                    columns={['Bucket', 'Hours (Z)', 'Crews']}
                                     renderRow={(b) => (
                                         <>
                                             <td className="p-4 font-black text-slate-800 text-base"><BucketDot color={b.color} className="mr-2" />{b.name}</td>
                                             <td className="p-4 text-sm font-mono font-semibold text-slate-600">{formatMilTime(b.start)} - {formatMilTime(b.end)}</td>
-                                            <td className="p-4 text-sm text-slate-600">{bucketHours(b).toFixed(1)} h</td>
                                             <td className="p-4">
                                                 <div className="flex gap-1 flex-wrap">
                                                     {designatedIds(b, crews).length === 0 ? <span className="text-slate-400 text-xs italic">All crews</span> :
