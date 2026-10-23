@@ -94,6 +94,32 @@
         html.dark input::placeholder { color: #64748b; }
         html.dark option { background-color: #0f1a2e; color: #e2e8f0; }
 
+
+        /* --- Shareable report: always light "paper", independent of the app theme --- */
+        .rp-sheet { background: #fff; color: #111827; border: 1px solid #cbd5e1; border-radius: 12px; padding: 28px 32px; max-width: 900px; font-size: 13px; line-height: 1.45; }
+        .rp-sheet h1 { font-size: 22px; font-weight: 800; margin: 0; }
+        .rp-sheet h2 { font-size: 13px; font-weight: 800; text-transform: uppercase; letter-spacing: .06em; margin: 22px 0 6px; padding-bottom: 4px; border-bottom: 2px solid #111827; }
+        .rp-sheet h2, .rp-sheet h3 { break-after: avoid; page-break-after: avoid; }
+        .rp-sheet h3 { font-size: 13px; font-weight: 700; margin: 14px 0 4px; }
+        .rp-sheet .rp-sub { color: #475569; margin-top: 2px; }
+        .rp-sheet .rp-msg { margin-top: 12px; padding: 8px 12px; background: #f1f5f9; border-left: 3px solid #2563eb; white-space: pre-wrap; }
+        .rp-sheet table { width: 100%; border-collapse: collapse; margin-top: 4px; }
+        .rp-sheet th { text-align: left; font-size: 11px; text-transform: uppercase; letter-spacing: .04em; color: #475569; border-bottom: 1px solid #94a3b8; padding: 4px 8px 4px 0; }
+        .rp-sheet td { padding: 4px 8px 4px 0; border-bottom: 1px solid #e2e8f0; vertical-align: top; }
+        .rp-sheet .rp-num { text-align: right; font-variant-numeric: tabular-nums; }
+        .rp-sheet .rp-muted { color: #64748b; }
+        .rp-sheet .rp-flag { font-weight: 700; color: #b91c1c; }
+        .rp-sheet .rp-next { font-weight: 800; color: #1d4ed8; }
+        .rp-sheet table, .rp-sheet tr { break-inside: avoid; }
+        @media print {
+            .no-print { display: none !important; }
+            body, html { background: #fff !important; }
+            #root .h-screen { height: auto !important; overflow: visible !important; display: block !important; }
+            main { overflow: visible !important; padding: 0 !important; }
+            .rp-sheet { border: none !important; border-radius: 0 !important; padding: 0 !important; max-width: none !important; }
+            @page { margin: 14mm; }
+        }
+
         /* Stripes for proposed hours visualization */
         .progress-stripes {
             background-image: linear-gradient(45deg, rgba(255,255,255,.15) 25%, transparent 25%, transparent 50%, rgba(255,255,255,.15) 50%, rgba(255,255,255,.15) 75%, transparent 75%, transparent);
@@ -209,6 +235,23 @@
         // A Flying Log note that mentions "GAR" counts as that crew pulling the ground alert that day.
         const isGarNote = (text) => /\bGAR\b/i.test(text || '');
 
+        // Every GAR up to `today`: manually logged ones plus Flying Log entries whose note mentions "GAR".
+        const collectGarEntries = (crews, gar, notes, buckets, today) => {
+            const crewIds = new Set(crews.map(c => c.id));
+            const bucketNames = Object.fromEntries((buckets || []).map(b => [b.id, b.name]));
+            const list = [];
+            Object.entries(gar).forEach(([d, e]) => {
+                if (d <= today && crewIds.has(e.crewId)) list.push({ id: `m|${d}`, date: d, crewId: e.crewId, note: e.note || '', source: 'manual' });
+            });
+            Object.entries(notes || {}).forEach(([key, text]) => {
+                const [d, bucketId, crewId] = key.split('|');
+                if (!isGarNote(text) || d > today || !crewIds.has(crewId)) return;
+                if (list.some(x => x.date === d && x.crewId === crewId)) return; // already logged manually
+                list.push({ id: `n|${key}`, date: d, crewId, note: text, source: 'log', bucketName: bucketNames[bucketId] || '' });
+            });
+            return list.sort((a, b) => b.date.localeCompare(a.date));
+        };
+
         // GAR (24-hour ground alert) history: gar[date] = { crewId, note }. One crew per day.
         const buildSeedGar = () => {
             const t = todayStr();
@@ -276,6 +319,47 @@
             if (a.sorties !== b.sorties) return a.sorties - b.sorties;
             return a.crew.crewName.localeCompare(b.crew.crewName);
         });
+
+        // Up-next order for the 24-hour GAR: never-done first, then longest since last GAR, then fewest total.
+        // Whoever is on GAR today (asOf) goes to the bottom of this order only.
+        const computeGarRotation = (crews, entries, asOf) => {
+            const byCrew = Object.fromEntries(crews.map(c => [c.id, { crew: c, last: null, total: 0 }]));
+            entries.forEach(({ date: d, crewId: id }) => {
+                const r = byCrew[id];
+                if (!r) return;
+                r.total += 1;
+                if (!r.last || d > r.last) r.last = d;
+            });
+            const onToday = new Set(entries.filter(x => x.date === asOf).map(x => x.crewId));
+            return Object.values(byCrew).map(r => ({ ...r, daysSince: r.last ? daysBetween(r.last, asOf) : null })).sort((a, b) => {
+                const ga = onToday.has(a.crew.id) ? 1 : 0;
+                const gb = onToday.has(b.crew.id) ? 1 : 0;
+                if (ga !== gb) return ga - gb;
+                const da = a.daysSince === null ? Infinity : a.daysSince;
+                const db = b.daysSince === null ? Infinity : b.daysSince;
+                if (da !== db) return db - da;
+                if (a.total !== b.total) return a.total - b.total;
+                return a.crew.crewName.localeCompare(b.crew.crewName);
+            });
+        };
+
+        // Per-bucket comparison: the bucket's assigned crews (or everyone if none assigned), longest gap in that bucket first.
+        const bucketBreakdown = (bucket, stats, crews) => {
+            const designated = designatedIds(bucket, crews);
+            const inBucket = designated.length ? stats.filter(r => designated.includes(r.crew.id)) : stats;
+            const outsiders = designated.length ? stats.filter(r => !designated.includes(r.crew.id) && (r.perBucket[bucket.id] || 0) > 0) : [];
+            const rows = [...inBucket].sort((x, y) => {
+                const dx = x.daysSinceByBucket[bucket.id] ?? Infinity;
+                const dy = y.daysSinceByBucket[bucket.id] ?? Infinity;
+                if (dx !== dy) return dy - dx;
+                const cx = x.perBucket[bucket.id] || 0;
+                const cy = y.perBucket[bucket.id] || 0;
+                if (cx !== cy) return cx - cy;
+                return x.crew.crewName.localeCompare(y.crew.crewName);
+            });
+            const counts = rows.map(r => r.perBucket[bucket.id] || 0);
+            return { designated, rows, outsiders, avg: rows.length ? counts.reduce((a, c) => a + c, 0) / rows.length : 0, max: Math.max(1, ...counts) };
+        };
 
         const sinceLabel = (days) => {
             if (days === null) return 'Never flown';
@@ -580,21 +664,7 @@
                         </div>
                         <div className="grid grid-cols-1 xl:grid-cols-2 gap-6">
                             {sorted.map(b => {
-                                const designated = designatedIds(b, crews);
-                                const inBucket = designated.length ? stats.filter(r => designated.includes(r.crew.id)) : stats;
-                                const outsiders = designated.length ? stats.filter(r => !designated.includes(r.crew.id) && (r.perBucket[b.id] || 0) > 0) : [];
-                                const rows = [...inBucket].sort((x, y) => {
-                                    const dx = x.daysSinceByBucket[b.id] ?? Infinity;
-                                    const dy = y.daysSinceByBucket[b.id] ?? Infinity;
-                                    if (dx !== dy) return dy - dx;
-                                    const cx = x.perBucket[b.id] || 0;
-                                    const cy = y.perBucket[b.id] || 0;
-                                    if (cx !== cy) return cx - cy;
-                                    return x.crew.crewName.localeCompare(y.crew.crewName);
-                                });
-                                const counts = rows.map(r => r.perBucket[b.id] || 0);
-                                const bAvg = rows.length ? counts.reduce((a, c) => a + c, 0) / rows.length : 0;
-                                const bMax = Math.max(1, ...counts);
+                                const { designated, rows, outsiders, avg: bAvg, max: bMax } = bucketBreakdown(b, stats, crews);
                                 return (
                                     <div key={b.id} className="bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden">
                                         <div className="px-4 py-3 border-b border-slate-200 flex items-center gap-2 font-bold text-slate-800" style={{ backgroundColor: b.color + '1a' }}>
@@ -865,45 +935,9 @@
             const [crewId, setCrewId] = useState('');
             const [note, setNote] = useState('');
 
-            // Every GAR: manually logged ones plus Flying Log entries whose note mentions "GAR".
-            const entries = useMemo(() => {
-                const crewIds = new Set(crews.map(c => c.id));
-                const bucketNames = Object.fromEntries((buckets || []).map(b => [b.id, b.name]));
-                const list = [];
-                Object.entries(gar).forEach(([d, e]) => {
-                    if (d <= today && crewIds.has(e.crewId)) list.push({ id: `m|${d}`, date: d, crewId: e.crewId, note: e.note || '', source: 'manual' });
-                });
-                Object.entries(notes || {}).forEach(([key, text]) => {
-                    const [d, bucketId, crewId] = key.split('|');
-                    if (!isGarNote(text) || d > today || !crewIds.has(crewId)) return;
-                    if (list.some(x => x.date === d && x.crewId === crewId)) return; // already logged manually
-                    list.push({ id: `n|${key}`, date: d, crewId, note: text, source: 'log', bucketName: bucketNames[bucketId] || '' });
-                });
-                return list.sort((a, b) => b.date.localeCompare(a.date));
-            }, [crews, gar, notes, buckets, today]);
+            const entries = useMemo(() => collectGarEntries(crews, gar, notes, buckets, today), [crews, gar, notes, buckets, today]);
 
-            // Up-next order as of today: never-done first, then longest since last GAR, then fewest total.
-            const rotation = useMemo(() => {
-                const byCrew = Object.fromEntries(crews.map(c => [c.id, { crew: c, last: null, total: 0 }]));
-                entries.forEach(({ date: d, crewId: id }) => {
-                    const r = byCrew[id];
-                    if (!r) return;
-                    r.total += 1;
-                    if (!r.last || d > r.last) r.last = d;
-                });
-                // Whoever is on GAR today goes to the bottom of this order only.
-                const onToday = new Set(entries.filter(x => x.date === today).map(x => x.crewId));
-                return Object.values(byCrew).map(r => ({ ...r, daysSince: r.last ? daysBetween(r.last, today) : null })).sort((a, b) => {
-                    const ga = onToday.has(a.crew.id) ? 1 : 0;
-                    const gb = onToday.has(b.crew.id) ? 1 : 0;
-                    if (ga !== gb) return ga - gb;
-                    const da = a.daysSince === null ? Infinity : a.daysSince;
-                    const db = b.daysSince === null ? Infinity : b.daysSince;
-                    if (da !== db) return db - da;
-                    if (a.total !== b.total) return a.total - b.total;
-                    return a.crew.crewName.localeCompare(b.crew.crewName);
-                });
-            }, [crews, entries, today]);
+            const rotation = useMemo(() => computeGarRotation(crews, entries, today), [crews, entries, today]);
 
             const history = entries;
             const crewMap = Object.fromEntries(crews.map(c => [c.id, c]));
@@ -1023,6 +1057,233 @@
                                 </div>
                             </div>
                         </div>
+                    </div>
+                </div>
+            );
+        };
+
+
+        // --- REPORT (shareable summary for the crews) ---
+        const ReportView = ({ crews, buckets, log, notes, gar, period: appPeriod }) => {
+            const today = todayStr();
+            const [asOf, setAsOf] = useState(today);
+            const [period, setPeriod] = useState(appPeriod);
+            const [title, setTitle] = useState('Crew Flying Report');
+            const [message, setMessage] = useState('');
+            const [inc, setInc] = useState({ flying: true, time30: true, buckets: true, gar: true, garHistory: true, notes: false });
+            const [copied, setCopied] = useState('');
+            const toggle = (k) => setInc(prev => ({ ...prev, [k]: !prev[k] }));
+            const canShare = typeof navigator !== 'undefined' && !!navigator.share;
+            const sorted = sortBuckets(buckets);
+            const crewName = Object.fromEntries(crews.map(c => [c.id, c.crewName]));
+
+            const data = useMemo(() => {
+                const stats = rankByFairness(computeCrewStats(crews, buckets, log, asOf, true, period));
+                const entries = collectGarEntries(crews, gar, notes, buckets, asOf);
+                const rotation = computeGarRotation(crews, entries, asOf);
+                const from = addDays(asOf, -period + 1);
+                const flightNotes = [];
+                Object.entries(notes).forEach(([key, text]) => {
+                    const [d, bucketId, crewId] = key.split('|');
+                    const bucket = buckets.find(b => b.id === bucketId);
+                    if (d < from || d > asOf || !crewName[crewId] || !bucket) return;
+                    flightNotes.push({ date: d, bucket: bucket.name, crew: crewName[crewId], text });
+                });
+                flightNotes.sort((a, b) => b.date.localeCompare(a.date));
+                return { stats, entries, rotation, from, flightNotes, perBucket: sorted.map(b => ({ bucket: b, ...bucketBreakdown(b, stats, crews) })) };
+            }, [crews, buckets, log, notes, gar, asOf, period]);
+
+            const time30Text = (c) => c.time30 && c.time30.hours !== '' && c.time30.hours != null ? `${c.time30.hours} h${c.time30.asOf ? ` (as of ${c.time30.asOf})` : ''}` : '—';
+            const lastText = (s) => s.last ? `${s.last} (${sinceLabel(s.daysSince).toLowerCase()})` : 'never';
+
+            const text = useMemo(() => {
+                const L = [];
+                L.push(`${title.toUpperCase()}`);
+                L.push(`As of ${prettyDate(asOf)} · last ${period} days`);
+                if (message.trim()) L.push('', message.trim());
+                if (inc.flying) {
+                    L.push('', 'FLYING — longest gap first');
+                    data.stats.forEach((s, i) => L.push(`${i + 1}. ${s.crew.crewName}: last flown ${lastText(s)} · ${s.sorties} sortie${s.sorties === 1 ? '' : 's'}${inc.time30 ? ` · 30-day time ${time30Text(s.crew)}` : ''}`));
+                }
+                if (inc.buckets) {
+                    L.push('', 'BY BUCKET — longest gap in that bucket first');
+                    data.perBucket.forEach(({ bucket, rows, avg }) => {
+                        L.push(`${bucket.name} (${formatMilTime(bucket.start)}-${formatMilTime(bucket.end)}Z), avg ${avg.toFixed(1)}:`);
+                        rows.forEach((r, i) => L.push(`  ${i + 1}. ${r.crew.crewName}: ${r.lastByBucket[bucket.id] ? `last ${r.lastByBucket[bucket.id]} (${sinceLabel(r.daysSinceByBucket[bucket.id]).toLowerCase()})` : 'never in this bucket'} · ${r.perBucket[bucket.id] || 0}`));
+                    });
+                }
+                if (inc.gar) {
+                    L.push('', 'GAR — up-next order');
+                    data.rotation.forEach((r, i) => L.push(`${i + 1}. ${r.crew.crewName}: ${r.last ? `last GAR ${r.last} (${sinceLabel(r.daysSince).toLowerCase()})` : 'no GAR yet'} · ${r.total} total`));
+                }
+                if (inc.garHistory && data.entries.length) {
+                    L.push('', 'RECENT GARs');
+                    data.entries.slice(0, 10).forEach(e => L.push(`${e.date}: ${crewName[e.crewId]}`));
+                }
+                if (inc.notes && data.flightNotes.length) {
+                    L.push('', 'FLYING LOG NOTES');
+                    data.flightNotes.forEach(n => L.push(`${n.date} ${n.bucket} — ${n.crew}: ${n.text}`));
+                }
+                return L.join('\n');
+            }, [data, title, message, asOf, period, inc]);
+
+            const copyText = async () => {
+                try {
+                    await navigator.clipboard.writeText(text);
+                } catch (e) {
+                    const ta = document.createElement('textarea');
+                    ta.value = text; document.body.appendChild(ta); ta.select();
+                    try { document.execCommand('copy'); } catch (err) {}
+                    document.body.removeChild(ta);
+                }
+                setCopied('Copied!');
+                setTimeout(() => setCopied(''), 2000);
+            };
+            const shareText = () => navigator.share({ title, text }).catch(() => {});
+
+            const options = [
+                ['flying', 'Flying summary'], ['time30', '30-day time'], ['buckets', 'Per-bucket breakdown'],
+                ['gar', 'GAR up-next order'], ['garHistory', 'Recent GARs'], ['notes', 'Flying log notes']
+            ];
+
+            return (
+                <div className="space-y-6">
+                    <div className="no-print">
+                        <h2 className="text-2xl font-bold text-slate-800">Report</h2>
+                        <p className="text-sm text-slate-500 mt-1">Build a summary to share with all the crews. Print it or save it as a PDF, or copy it as text for chat or email.</p>
+                    </div>
+
+                    <div className="no-print bg-white rounded-xl shadow-sm border border-slate-200 p-4 space-y-4">
+                        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                            <div>
+                                <label className="block text-xs font-bold text-slate-600 mb-1">Title</label>
+                                <input type="text" value={title} onChange={e => setTitle(e.target.value)} className="w-full text-sm border border-slate-300 rounded-lg p-2 focus:ring-2 focus:ring-blue-500 outline-none" />
+                            </div>
+                            <div>
+                                <label className="block text-xs font-bold text-slate-600 mb-1">As of</label>
+                                <input type="date" max={today} value={asOf} onChange={e => e.target.value && setAsOf(e.target.value)} className="w-full text-sm border border-slate-300 rounded-lg p-2 focus:ring-2 focus:ring-blue-500 outline-none" />
+                            </div>
+                            <div>
+                                <label className="block text-xs font-bold text-slate-600 mb-1">Window</label>
+                                <PeriodToggle value={period} onChange={setPeriod} />
+                            </div>
+                        </div>
+                        <div>
+                            <label className="block text-xs font-bold text-slate-600 mb-1">Message to crews (optional)</label>
+                            <textarea rows={2} maxLength={500} value={message} onChange={e => setMessage(e.target.value)} placeholder="e.g. Please check your last-flown dates and flag any errors by Friday."
+                                className="w-full text-sm border border-slate-300 rounded-lg p-2 focus:ring-2 focus:ring-blue-500 outline-none"></textarea>
+                        </div>
+                        <div>
+                            <label className="block text-xs font-bold text-slate-600 mb-2">Include</label>
+                            <div className="flex flex-wrap gap-2">
+                                {options.map(([k, label]) => (
+                                    <button type="button" key={k} onClick={() => toggle(k)} aria-pressed={inc[k]}
+                                        className={`px-3 py-1 text-sm rounded-full border ${inc[k] ? 'bg-blue-600 text-white border-blue-600 shadow-sm' : 'bg-white text-slate-600 border-slate-300 hover:bg-slate-50'}`}>
+                                        {label}
+                                    </button>
+                                ))}
+                            </div>
+                            {inc.notes && <p className="text-xs text-amber-700 font-semibold mt-2"><i className="fa-solid fa-triangle-exclamation mr-1"></i>Flying log notes will be visible to everyone you share this with.</p>}
+                        </div>
+                        <div className="flex flex-wrap gap-2 pt-1">
+                            <button onClick={() => window.print()} className="px-4 py-2 rounded-lg font-bold text-sm text-white bg-blue-600 hover:bg-blue-700"><i className="fa-solid fa-print mr-2"></i>Print / Save PDF</button>
+                            <button onClick={copyText} className="px-4 py-2 rounded-lg font-bold text-sm text-slate-700 bg-slate-100 hover:bg-slate-200 border border-slate-200"><i className="fa-regular fa-copy mr-2"></i>{copied || 'Copy as text'}</button>
+                            {canShare && <button onClick={shareText} className="px-4 py-2 rounded-lg font-bold text-sm text-slate-700 bg-slate-100 hover:bg-slate-200 border border-slate-200"><i className="fa-solid fa-share-nodes mr-2"></i>Share…</button>}
+                        </div>
+                    </div>
+
+                    <div id="report-sheet" className="rp-sheet">
+                        <h1>{title || 'Crew Flying Report'}</h1>
+                        <div className="rp-sub">As of {prettyDate(asOf)} · flying over the last {period} days ({data.from} to {asOf})</div>
+                        {message.trim() && <div className="rp-msg">{message.trim()}</div>}
+
+                        {inc.flying && (
+                            <>
+                                <h2>Flying — longest gap first</h2>
+                                <table>
+                                    <thead><tr><th>#</th><th>Crew</th><th>Last flown</th><th className="rp-num">Sorties</th>{inc.time30 && <th>30-day time</th>}</tr></thead>
+                                    <tbody>
+                                        {data.stats.map((s, i) => (
+                                            <tr key={s.crew.id}>
+                                                <td className="rp-muted">{i + 1}</td>
+                                                <td><strong>{s.crew.crewName}</strong></td>
+                                                <td className={s.daysSince === null ? 'rp-flag' : ''}>{lastText(s)}</td>
+                                                <td className="rp-num">{s.sorties}</td>
+                                                {inc.time30 && <td>{time30Text(s.crew)}</td>}
+                                            </tr>
+                                        ))}
+                                    </tbody>
+                                </table>
+                            </>
+                        )}
+
+                        {inc.buckets && data.perBucket.length > 0 && (
+                            <>
+                                <h2>By bucket — longest gap in that bucket first</h2>
+                                {data.perBucket.map(({ bucket, rows, avg, designated, outsiders }) => (
+                                    <div key={bucket.id} style={{ breakInside: 'avoid' }}>
+                                        <h3><span style={{ display: 'inline-block', width: 9, height: 9, borderRadius: 9, background: bucket.color, marginRight: 6 }}></span>{bucket.name} <span className="rp-muted" style={{ fontWeight: 400 }}>{formatMilTime(bucket.start)}–{formatMilTime(bucket.end)}Z · {designated.length ? `${designated.length} assigned crews` : 'all crews'} · avg {avg.toFixed(1)}</span></h3>
+                                        <table style={{ tableLayout: 'fixed' }}>
+                                            <colgroup><col style={{ width: 28 }} /><col style={{ width: '38%' }} /><col /><col style={{ width: 50 }} /></colgroup>
+                                            <tbody>
+                                                {rows.map((r, i) => (
+                                                    <tr key={r.crew.id}>
+                                                        <td className="rp-muted" style={{ width: 24 }}>{i + 1}</td>
+                                                        <td><strong>{r.crew.crewName}</strong></td>
+                                                        <td className={r.lastByBucket[bucket.id] ? '' : 'rp-flag'}>{r.lastByBucket[bucket.id] ? `${r.lastByBucket[bucket.id]} (${sinceLabel(r.daysSinceByBucket[bucket.id]).toLowerCase()})` : 'never in this bucket'}</td>
+                                                        <td className="rp-num">{r.perBucket[bucket.id] || 0}</td>
+                                                    </tr>
+                                                ))}
+                                            </tbody>
+                                        </table>
+                                        {outsiders.length > 0 && <div className="rp-muted" style={{ marginTop: 3 }}>Also flew here, not assigned: {outsiders.map(r => `${r.crew.crewName} (${r.perBucket[bucket.id]})`).join(', ')}</div>}
+                                    </div>
+                                ))}
+                            </>
+                        )}
+
+                        {inc.gar && (
+                            <>
+                                <h2>GAR — up-next order</h2>
+                                <table>
+                                    <thead><tr><th>#</th><th>Crew</th><th>Last GAR</th><th className="rp-num">Total</th></tr></thead>
+                                    <tbody>
+                                        {data.rotation.map((r, i) => (
+                                            <tr key={r.crew.id}>
+                                                <td className="rp-muted">{i + 1}</td>
+                                                <td><strong>{r.crew.crewName}</strong>{i === 0 && <span className="rp-next"> · next up</span>}</td>
+                                                <td className={r.last ? '' : 'rp-flag'}>{r.last ? `${r.last} (${sinceLabel(r.daysSince).toLowerCase()})` : 'no GAR yet'}</td>
+                                                <td className="rp-num">{r.total}</td>
+                                            </tr>
+                                        ))}
+                                    </tbody>
+                                </table>
+                            </>
+                        )}
+
+                        {inc.garHistory && data.entries.length > 0 && (
+                            <>
+                                <h2>Recent GARs</h2>
+                                <table>
+                                    <tbody>
+                                        {data.entries.slice(0, 10).map(e => <tr key={e.id}><td style={{ width: 130 }}>{prettyDate(e.date)}</td><td><strong>{crewName[e.crewId]}</strong></td></tr>)}
+                                    </tbody>
+                                </table>
+                            </>
+                        )}
+
+                        {inc.notes && data.flightNotes.length > 0 && (
+                            <>
+                                <h2>Flying log notes</h2>
+                                <table>
+                                    <tbody>
+                                        {data.flightNotes.map((n, i) => <tr key={i}><td style={{ width: 90 }}>{n.date}</td><td style={{ width: 90 }}>{n.bucket}</td><td style={{ width: 170 }}><strong>{n.crew}</strong></td><td>{n.text}</td></tr>)}
+                                    </tbody>
+                                </table>
+                            </>
+                        )}
+
+                        <div className="rp-muted" style={{ marginTop: 22, fontSize: 11 }}>Generated {prettyDate(today)} from the Crew Flying Tracker. Times in Zulu.</div>
                     </div>
                 </div>
             );
@@ -1222,14 +1483,15 @@
                 { id: 'calendar', label: 'Flying Log', icon: 'fa-calendar-days' },
                 { id: 'gar', label: 'Ground Alert (GAR)', icon: 'fa-bell' },
                 { id: 'buckets', label: 'Flying Buckets', icon: 'fa-clock' },
-                { id: 'crews', label: 'Crews', icon: 'fa-users' }
+                { id: 'crews', label: 'Crews', icon: 'fa-users' },
+                { id: 'report', label: 'Report', icon: 'fa-file-lines' }
             ];
 
             return (
                 <div className="h-screen w-full flex flex-col md:flex-row overflow-hidden">
 
                     {/* Sidebar */}
-                    <nav className="w-full md:w-64 bg-slate-900 text-slate-300 flex-shrink-0 flex flex-col shadow-2xl z-20">
+                    <nav className="no-print w-full md:w-64 bg-slate-900 text-slate-300 flex-shrink-0 flex flex-col shadow-2xl z-20">
                         <div className="p-6 flex items-center gap-3 text-white border-b border-slate-800 bg-slate-950/50">
                             <i className="fa-solid fa-shield-halved text-blue-500 text-2xl"></i>
                             <div>
@@ -1267,6 +1529,7 @@
                             {activeTab === 'dashboard' && <DashboardView crews={crews} buckets={buckets} log={log} period={period} setPeriod={setPeriod} onUpdateCrew={handleUpdateCrew} />}
                             {activeTab === 'calendar' && <CalendarView crews={crews} buckets={buckets} log={log} period={period} setPeriod={setPeriod} selectedDate={selectedDate} setSelectedDate={setSelectedDate} onAdd={handleAddToBucket} onRemove={handleRemoveFromBucket} notes={notes} onSetNote={handleSetNote} />}
 
+                            {activeTab === 'report' && <ReportView crews={crews} buckets={buckets} log={log} notes={notes} gar={gar} period={period} />}
                             {activeTab === 'gar' && <GarView crews={crews} gar={gar} notes={notes} buckets={buckets} onLog={handleLogGar} onRemove={handleRemoveGar} />}
 
                             {activeTab === 'buckets' && (
