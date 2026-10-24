@@ -115,6 +115,12 @@
         .rp-sheet .rp-muted { color: #64748b; }
         .rp-sheet .rp-flag { font-weight: 700; color: #b91c1c; }
         .rp-sheet .rp-next { font-weight: 800; color: #1d4ed8; }
+        .rp-sheet .rp-chart { margin-top: 6px; }
+        .rp-sheet .rp-chart-row { display: flex; align-items: center; gap: 10px; padding: 3px 0; break-inside: avoid; }
+        .rp-sheet .rp-chart-label { width: 190px; flex: none; font-weight: 600; }
+        .rp-sheet .rp-chart-track { flex: 1; height: 16px; background: #f1f5f9; border-radius: 3px; overflow: hidden; }
+        .rp-sheet .rp-bar { height: 100%; border-radius: 3px; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+        .rp-sheet .rp-chart-value { width: 120px; flex: none; font-variant-numeric: tabular-nums; }
         .rp-sheet table, .rp-sheet tr { break-inside: avoid; }
         @media print {
             .no-print { display: none !important; }
@@ -1142,6 +1148,23 @@
         };
 
 
+        // Horizontal bar chart built from plain divs so it prints and exports cleanly.
+        const BarChart = ({ rows, color, valueText }) => {
+            const max = Math.max(1, ...rows.map(r => r.value));
+            return (
+                <div className="rp-chart">
+                    {rows.map(r => (
+                        <div key={r.crew.id} className="rp-chart-row">
+                            <div className="rp-chart-label">{r.crew.crewName}</div>
+                            <div className="rp-chart-track"><div className="rp-bar" style={{ width: `${(r.value / max) * 100}%`, background: color }}></div></div>
+                            <div className="rp-chart-value"><strong>{r.value}</strong>{valueText ? <span className="rp-muted"> {valueText(r)}</span> : null}</div>
+                        </div>
+                    ))}
+                    {rows.length === 0 && <div className="rp-muted">No crews.</div>}
+                </div>
+            );
+        };
+
         // --- REPORT (shareable summary for the crews) ---
         const ReportView = ({ crews, buckets, log, notes, gar, period: appPeriod }) => {
             const today = todayStr();
@@ -1149,7 +1172,7 @@
             const [period, setPeriod] = useState(appPeriod);
             const [title, setTitle] = useState('Crew Flying Report');
             const [message, setMessage] = useState('');
-            const [inc, setInc] = useState({ flying: true, time30: true, buckets: true, gar: true, garHistory: true, notes: false });
+            const [inc, setInc] = useState({ flying: true, time30: true, charts: true, buckets: true, gar: true, garHistory: true, notes: false });
             const [copied, setCopied] = useState('');
             const toggle = (k) => setInc(prev => ({ ...prev, [k]: !prev[k] }));
             const canShare = typeof navigator !== 'undefined' && !!navigator.share;
@@ -1169,7 +1192,14 @@
                     flightNotes.push({ date: d, bucket: bucket.name, crew: crewName[crewId], text });
                 });
                 flightNotes.sort((a, b) => b.date.localeCompare(a.date));
-                return { stats, entries, rotation, from, flightNotes, perBucket: sorted.map(b => ({ bucket: b, ...bucketBreakdown(b, stats, crews) })) };
+                const windowStart = addDays(asOf, -period);
+                const totals = Object.fromEntries(rotation.map(r => [r.crew.id, r.total]));
+                const garInWindow = {};
+                entries.forEach(e => { if (e.date > windowStart) garInWindow[e.crewId] = (garInWindow[e.crewId] || 0) + 1; });
+                const byName = (a, b) => a.crew.crewName.localeCompare(b.crew.crewName);
+                const sortieRows = stats.map(s => ({ crew: s.crew, value: s.sorties })).sort((a, b) => b.value - a.value || byName(a, b));
+                const garRows = crews.map(c => ({ crew: c, value: garInWindow[c.id] || 0, total: totals[c.id] || 0 })).sort((a, b) => b.value - a.value || b.total - a.total || byName(a, b));
+                return { stats, entries, rotation, from, flightNotes, sortieRows, garRows, perBucket: sorted.map(b => ({ bucket: b, ...bucketBreakdown(b, stats, crews) })) };
             }, [crews, buckets, log, notes, gar, asOf, period]);
 
             const time30Text = (c) => c.time30 && c.time30.hours !== '' && c.time30.hours != null ? `${c.time30.hours} h${c.time30.asOf ? ` (as of ${c.time30.asOf})` : ''}` : '—';
@@ -1183,6 +1213,15 @@
                 if (inc.flying) {
                     L.push('', 'FLYING — longest gap first');
                     data.stats.forEach((s, i) => L.push(`${i + 1}. ${s.crew.crewName}: last flown ${lastText(s)} · ${s.sorties} sortie${s.sorties === 1 ? '' : 's'}${inc.time30 ? ` · 30-day time ${time30Text(s.crew)}` : ''}`));
+                }
+                if (inc.charts) {
+                    const bar = (v, max) => '█'.repeat(max ? Math.round((v / max) * 20) : 0);
+                    const sMax = Math.max(0, ...data.sortieRows.map(r => r.value));
+                    L.push('', `SORTIES FLOWN — last ${period} days`);
+                    data.sortieRows.forEach(r => L.push(`${r.crew.crewName}  ${bar(r.value, sMax)} ${r.value}`));
+                    const gMax = Math.max(0, ...data.garRows.map(r => r.value));
+                    L.push('', `GARs FILLED — last ${period} days (all-time in brackets)`);
+                    data.garRows.forEach(r => L.push(`${r.crew.crewName}  ${bar(r.value, gMax)} ${r.value} (${r.total})`));
                 }
                 if (inc.buckets) {
                     L.push('', 'BY BUCKET — longest gap in that bucket first');
@@ -1222,7 +1261,7 @@
 
             const options = [
                 ['flying', 'Flying summary'], ['time30', '30-day time'], ['buckets', 'Per-bucket breakdown'],
-                ['gar', 'GAR up-next order'], ['garHistory', 'Recent GARs'], ['notes', 'Flying log notes']
+                ['gar', 'GAR up-next order'], ['garHistory', 'Recent GARs'], ['charts', 'Charts'], ['notes', 'Flying log notes']
             ];
 
             return (
@@ -1293,6 +1332,15 @@
                                         ))}
                                     </tbody>
                                 </table>
+                            </>
+                        )}
+
+                        {inc.charts && (
+                            <>
+                                <h2>Sorties flown — last {period} days</h2>
+                                <BarChart rows={data.sortieRows} color="#2563eb" />
+                                <h2>GARs filled — last {period} days</h2>
+                                <BarChart rows={data.garRows} color="#d97706" valueText={r => `(${r.total} all-time)`} />
                             </>
                         )}
 
@@ -1751,7 +1799,7 @@
                     {/* Main Content */}
                     <main className="flex-1 overflow-y-auto p-4 md:p-8 relative">
                         <div className="max-w-7xl mx-auto h-full">
-                            {cloudUnavailable && <div className="mb-4 text-sm text-amber-800 bg-amber-50 border border-amber-200 rounded-lg p-3"><i className="fa-solid fa-triangle-exclamation mr-2"></i>Cloud sync could not load, so this page is working offline with data saved on this device only. Reload to try again.</div>}
+                            {cloudUnavailable && <div className="no-print mb-4 text-sm text-amber-800 bg-amber-50 border border-amber-200 rounded-lg p-3"><i className="fa-solid fa-triangle-exclamation mr-2"></i>Cloud sync could not load, so this page is working offline with data saved on this device only. Reload to try again.</div>}
                             {activeTab === 'dashboard' && <DashboardView crews={crews} buckets={buckets} log={log} period={period} setPeriod={setPeriod} onUpdateCrew={handleUpdateCrew} />}
                             {activeTab === 'calendar' && <CalendarView crews={crews} buckets={buckets} log={log} period={period} setPeriod={setPeriod} selectedDate={selectedDate} setSelectedDate={setSelectedDate} onAdd={handleAddToBucket} onRemove={handleRemoveFromBucket} notes={notes} onSetNote={handleSetNote} />}
 
