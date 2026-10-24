@@ -190,6 +190,10 @@
             appId: "1:739513309494:web:f99a87c5d987cdd28cbb97"
         };
 
+        // Master switch for shared cloud data + login. Leave false until the Firebase project is ready
+        // (Email/Password enabled, users created, Firestore created, rules published); then set to true.
+        const CLOUD_ENABLED = false;
+
         // Crews type just a username; Firebase needs an email-shaped login, so one is filled in behind the scenes.
         const USERNAME_EMAIL_DOMAIN = 'crews.example.com';
         const usernameToEmail = (u) => {
@@ -1918,7 +1922,7 @@
 
         function Root() {
             const fb = window.firebase;
-            const available = !!(fb && fb.auth && fb.firestore);
+            const available = CLOUD_ENABLED && !!(fb && fb.auth && fb.firestore);
             const ctx = useMemo(() => {
                 if (!available) return null;
                 const app = fb.apps.length ? fb.app() : fb.initializeApp(FIREBASE_CONFIG);
@@ -1929,7 +1933,7 @@
             const [user, setUser] = useState(available ? undefined : null);
             useEffect(() => ctx ? ctx.auth.onAuthStateChanged(u => setUser(u)) : undefined, [ctx]);
 
-            if (!available) return <FlightSchedulerApp cloudUnavailable />;
+            if (!available) return <FlightSchedulerApp cloudUnavailable={CLOUD_ENABLED} />;
             if (user === undefined) return <div className="min-h-screen flex items-center justify-center bg-slate-900 text-slate-300"><i className="fa-solid fa-circle-notch fa-spin text-3xl"></i></div>;
             if (!user) return <LoginScreen auth={ctx.auth} />;
             return <FlightSchedulerApp key={user.uid} cloud db={ctx.db} user={user} onSignOut={() => ctx.auth.signOut()} />;
