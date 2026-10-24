@@ -30,7 +30,7 @@
                 var saved = localStorage.getItem('flyfair_theme');
                 dark = saved ? saved === 'dark' : window.matchMedia('(prefers-color-scheme: dark)').matches;
             } catch (e) {}
-            if (dark) document.documentElement.classList.add('dark');
+            if (dark) { document.documentElement.classList.add('dark'); var tc = document.querySelector('meta[name="theme-color"]'); if (tc) tc.setAttribute('content', '#0a0a0a'); }
         })();
     </script>
 
@@ -62,52 +62,68 @@
         ::-webkit-scrollbar-thumb:hover { background: #94a3b8; }
         
 
-        /* --- Dark theme: overrides for the utility classes the app uses --- */
-        html.dark { color-scheme: dark; }
-        html.dark body { background-color: #0b1220; color: #e2e8f0; }
-        html.dark ::-webkit-scrollbar-thumb { background: #334155; }
-        html.dark ::-webkit-scrollbar-thumb:hover { background: #475569; }
-        html.dark .bg-white { background-color: #131d30; }
-        html.dark .bg-slate-50, html.dark .bg-slate-50\/50, html.dark .bg-slate-50\/60 { background-color: #17233a; }
-        html.dark .bg-slate-100 { background-color: #1c2a44; }
-        html.dark .bg-slate-300 { background-color: #334155; }
-        html.dark .hover\:bg-slate-50:hover, html.dark .hover\:bg-slate-50\/80:hover { background-color: #1a2740; }
-        html.dark .hover\:bg-slate-100:hover, html.dark .hover\:bg-slate-200:hover { background-color: #22324f; }
-        html.dark .hover\:bg-blue-50:hover, html.dark .hover\:bg-blue-50\/60:hover { background-color: rgba(59,130,246,.15); }
+        /* --- Dark theme: charcoal + gold, taken from the 91 ARS squadron patch.
+               Overrides the utility classes the app uses; yellow is the accent. --- */
+        html.dark { color-scheme: dark; --gold: #f5c400; --gold-hi: #ffd633; }
+        html.dark body { background-color: #0a0a0a; color: #e5e5e5; }
+        html.dark ::-webkit-scrollbar-thumb { background: #333; }
+        html.dark ::-webkit-scrollbar-thumb:hover { background: #4a4a4a; }
+        html.dark nav { box-shadow: inset -1px 0 0 rgba(245,196,0,.28); }
+
+        /* surfaces */
+        html.dark .bg-white { background-color: #141414; }
+        html.dark .bg-slate-50, html.dark .bg-slate-50\/50, html.dark .bg-slate-50\/60 { background-color: #1a1a1a; }
+        html.dark .bg-slate-100 { background-color: #222; }
+        html.dark .bg-slate-300 { background-color: #3a3a3a; }
+        html.dark .bg-slate-700 { background-color: #f5f5f5; }
+        html.dark .bg-slate-900 { background-color: #0d0d0d; }
+        html.dark .bg-slate-950\/50 { background-color: rgba(0,0,0,.45); }
+        html.dark .bg-slate-950\/30 { background-color: rgba(0,0,0,.3); }
+        html.dark .hover\:bg-slate-50:hover, html.dark .hover\:bg-slate-50\/80:hover { background-color: #1c1c1c; }
+        html.dark .hover\:bg-slate-100:hover, html.dark .hover\:bg-slate-200:hover { background-color: #262626; }
+        html.dark .hover\:bg-slate-800:hover { background-color: #1c1c1c; }
         html.dark .hover\:bg-red-50:hover { background-color: rgba(239,68,68,.15); }
-        html.dark .hover\:bg-blue-200:hover { background-color: rgba(59,130,246,.35); }
-        html.dark .bg-slate-700 { background-color: #e2e8f0; }
-        html.dark main .bg-slate-900 { background-color: #2563eb; }
-        html.dark main .hover\:bg-slate-800:hover { background-color: #1d4ed8; }
 
-        html.dark .text-slate-900, html.dark .text-slate-800 { color: #f1f5f9; }
-        html.dark .text-slate-700, html.dark .hover\:text-slate-700:hover { color: #e2e8f0; }
-        html.dark .text-slate-600 { color: #cbd5e1; }
-        html.dark .text-slate-500 { color: #9fb0c8; }
-        html.dark .text-slate-400 { color: #8091aa; }
-        html.dark .border-slate-100, html.dark .divide-slate-100 > :not([hidden]) ~ :not([hidden]) { border-color: #1f2c44; }
-        html.dark .border-slate-200 { border-color: #2a3a57; }
-        html.dark .border-slate-300 { border-color: #3a4c6e; }
-        html.dark .border-slate-900 { border-color: #f1f5f9; }
-        html.dark .border-white { border-color: #131d30; }
+        /* text and borders (neutral greys, no blue cast) */
+        html.dark .text-slate-900, html.dark .text-slate-800 { color: #f5f5f5; }
+        html.dark .text-slate-700, html.dark .hover\:text-slate-700:hover { color: #e5e5e5; }
+        html.dark .text-slate-600, html.dark .text-slate-300 { color: #d4d4d4; }
+        html.dark .text-slate-500 { color: #a3a3a3; }
+        html.dark .text-slate-400 { color: #8a8a8a; }
+        html.dark .border-slate-100, html.dark .divide-slate-100 > :not([hidden]) ~ :not([hidden]) { border-color: #202020; }
+        html.dark .border-slate-200, html.dark .border-slate-800 { border-color: #2b2b2b; }
+        html.dark .border-slate-300 { border-color: #3a3a3a; }
+        html.dark .border-slate-900 { border-color: #f5f5f5; }
+        html.dark .border-white { border-color: #141414; }
 
-        html.dark .bg-blue-50 { background-color: rgba(59,130,246,.16); }
-        html.dark .bg-blue-50\/50 { background-color: rgba(59,130,246,.1); }
-        html.dark .bg-blue-100 { background-color: rgba(59,130,246,.22); }
+        /* gold accent: replaces blue everywhere in dark mode */
+        html.dark .bg-blue-600, html.dark main .bg-slate-900, html.dark .bg-indigo-500 { background-color: var(--gold); }
+        html.dark .bg-blue-600, html.dark .bg-blue-600.text-white, html.dark main .bg-slate-900, html.dark main .bg-slate-900.text-white { color: #0a0a0a; }
+        html.dark .hover\:bg-blue-700:hover, html.dark main .hover\:bg-slate-800:hover { background-color: var(--gold-hi); }
+        html.dark .text-blue-200 { color: rgba(10,10,10,.55); }
+        html.dark .text-blue-500, html.dark .text-blue-600, html.dark .text-blue-700, html.dark .hover\:text-blue-600:hover, html.dark .hover\:text-blue-700:hover { color: var(--gold); }
+        html.dark .bg-blue-50 { background-color: rgba(245,196,0,.10); }
+        html.dark .bg-blue-50\/50 { background-color: rgba(245,196,0,.06); }
+        html.dark .bg-blue-100 { background-color: rgba(245,196,0,.16); }
+        html.dark .hover\:bg-blue-50:hover, html.dark .hover\:bg-blue-50\/60:hover { background-color: rgba(245,196,0,.12); }
+        html.dark .hover\:bg-blue-200:hover { background-color: rgba(245,196,0,.28); }
+        html.dark .border-blue-600, html.dark .border-blue-500, html.dark .hover\:border-blue-500:hover, html.dark .focus\:border-blue-500:focus { border-color: var(--gold); }
+        html.dark .border-blue-200 { border-color: rgba(245,196,0,.4); }
+        html.dark .focus\:ring-blue-500:focus, html.dark .ring-blue-500 { --tw-ring-color: var(--gold); }
+
+        /* status colours stay readable on charcoal */
         html.dark .bg-red-100 { background-color: rgba(239,68,68,.2); }
         html.dark .bg-amber-50 { background-color: rgba(245,158,11,.14); }
-        html.dark .text-blue-700, html.dark .hover\:text-blue-700:hover, html.dark .text-blue-600, html.dark .hover\:text-blue-600:hover { color: #93c5fd; }
         html.dark .text-red-700 { color: #fca5a5; }
         html.dark .text-red-600, html.dark .hover\:text-red-600:hover { color: #f87171; }
         html.dark .text-amber-700 { color: #fcd34d; }
         html.dark .text-amber-600 { color: #fbbf24; }
         html.dark .text-emerald-600 { color: #34d399; }
-        html.dark .border-blue-200 { border-color: rgba(59,130,246,.45); }
         html.dark .border-amber-200 { border-color: rgba(245,158,11,.45); }
 
-        html.dark input, html.dark select { background-color: #0f1a2e; color: #e2e8f0; }
-        html.dark input::placeholder { color: #64748b; }
-        html.dark option { background-color: #0f1a2e; color: #e2e8f0; }
+        html.dark input, html.dark select, html.dark textarea { background-color: #101010; color: #e5e5e5; }
+        html.dark input::placeholder, html.dark textarea::placeholder { color: #737373; }
+        html.dark option { background-color: #101010; color: #e5e5e5; }
 
 
         /* --- Shareable report: always light "paper", independent of the app theme --- */
@@ -171,7 +187,7 @@
         /* "Mobile" layout chosen on a wide screen: show the app in a phone-width column. */
         @media (min-width: 769px) {
             html.force-mobile body { background: #cbd5e1; }
-            html.force-mobile.dark body { background: #020617; }
+            html.force-mobile.dark body { background: #000; }
             html.force-mobile #root { max-width: 430px; margin: 0 auto; height: 100vh; overflow: hidden; box-shadow: 0 0 0 1px #94a3b8, 0 10px 40px rgba(0,0,0,.3); }
             html.force-mobile [class*="md:grid-cols"], html.force-mobile [class*="lg:grid-cols"], html.force-mobile [class*="xl:grid-cols"], html.force-mobile [class*="sm:grid-cols"] { grid-template-columns: minmax(0, 1fr) !important; }
             html.force-mobile [class*="xl:col-span"] { grid-column: auto !important; }
@@ -2023,6 +2039,8 @@
             const toggleTheme = () => {
                 const next = !isDark;
                 document.documentElement.classList.toggle('dark', next);
+                const tc = document.querySelector('meta[name="theme-color"]');
+                if (tc) tc.setAttribute('content', next ? '#0a0a0a' : '#0f172a');
                 setIsDark(next);
                 try { localStorage.setItem('flyfair_theme', next ? 'dark' : 'light'); } catch (e) {}
             };
