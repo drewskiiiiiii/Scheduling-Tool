@@ -195,7 +195,7 @@
         // --- CONSTANTS & SEED DATA ---
         const CREW_ROLES = ['Aircraft Commander (AC)', 'Pilot (P)', 'Boom Operator (BO)', 'Instructor (IP)', 'Instructor Boom (IB)'];
         const BUCKET_COLORS = ['#2563eb', '#059669', '#d97706', '#7c3aed', '#dc2626', '#0891b2', '#db2777', '#475569'];
-        const PERIODS = [7, 30, 90, 'all'];
+        const PERIODS = [30, 60, 90, 'all'];
         // 'all' = no time window: every logged day up to the as-of date.
         const periodShort = (p) => p === 'all' ? 'all time' : `${p}d`;
         const periodLong = (p) => p === 'all' ? 'all time' : `last ${p} days`;
