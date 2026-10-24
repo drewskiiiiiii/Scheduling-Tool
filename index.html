@@ -222,8 +222,8 @@
         const ROLES_ENABLED = true;
         const STAFF_GROUP_NAME = 'Caddyshack Staff Personnel';
         const EDITOR_PASSCODE_SALT = 'stratosched-editor-v1';
-        const EDITOR_PASSCODE_ITERATIONS = 100000;
-        const EDITOR_PASSCODE_HASH = 'e35f8c1bbe466a78b345f233f8335b6b0778050416d1413baa8834a11f171114';
+        const EDITOR_PASSCODE_ITERATIONS = 600000;
+        const EDITOR_PASSCODE_HASH = '7c49d6ed01efda424827d3792f526636fd476e3b576b8b61ee7670282a02858c';
         const normalizePasscode = (c) => c.trim().toUpperCase();
         const verifyPasscode = async (code) => {
             if (!window.crypto || !window.crypto.subtle) throw new Error('crypto-unavailable');
