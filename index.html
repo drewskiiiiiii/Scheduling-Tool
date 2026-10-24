@@ -195,7 +195,11 @@
         // --- CONSTANTS & SEED DATA ---
         const CREW_ROLES = ['Aircraft Commander (AC)', 'Pilot (P)', 'Boom Operator (BO)', 'Instructor (IP)', 'Instructor Boom (IB)'];
         const BUCKET_COLORS = ['#2563eb', '#059669', '#d97706', '#7c3aed', '#dc2626', '#0891b2', '#db2777', '#475569'];
-        const PERIODS = [7, 30, 90];
+        const PERIODS = [7, 30, 90, 'all'];
+        // 'all' = no time window: every logged day up to the as-of date.
+        const periodShort = (p) => p === 'all' ? 'all time' : `${p}d`;
+        const periodLong = (p) => p === 'all' ? 'all time' : `last ${p} days`;
+        const periodStart = (asOf, p) => p === 'all' ? '0000-00-00' : addDays(asOf, -p);
         const MONTHS = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
         const WEEKDAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 
@@ -438,7 +442,7 @@
         // Flying "as of" a date: only days before asOf count (plus asOf itself when includeAsOf).
         const computeCrewStats = (crews, buckets, log, asOf, includeAsOf, periodDays) => {
             const bucketMap = Object.fromEntries(buckets.map(b => [b.id, b]));
-            const windowStart = addDays(asOf, -periodDays);
+            const windowStart = periodStart(asOf, periodDays);
             const stats = {};
             crews.forEach(c => { stats[c.id] = { crew: c, last: null, sorties: 0, perBucket: {}, lastByBucket: {} }; });
 
@@ -571,7 +575,7 @@
             <div className="inline-flex bg-white border border-slate-200 rounded-lg shadow-sm p-1 gap-1">
                 {PERIODS.map(p => (
                     <button key={p} onClick={() => onChange(p)} className={`px-3 py-1 rounded-md text-sm font-bold transition-colors ${value === p ? 'bg-slate-900 text-white' : 'text-slate-600 hover:bg-slate-100'}`}>
-                        {p}d
+                        {p === 'all' ? 'All' : `${p}d`}
                     </button>
                 ))}
             </div>
@@ -754,7 +758,7 @@
                             <p className="text-xs text-slate-500 mt-1">{longestGap ? sinceLabel(longestGap.daysSince) : 'Add a crew to begin'}</p>
                         </div>
                         <div className="bg-white p-5 rounded-xl shadow-sm border border-slate-100">
-                            <p className="text-sm font-medium text-slate-500">Sorties ({period}d)</p>
+                            <p className="text-sm font-medium text-slate-500">Sorties ({periodShort(period)})</p>
                             <h3 className="text-3xl font-bold text-slate-800 mt-1">{totalSorties}</h3>
                         </div>
                         <div className="bg-white p-5 rounded-xl shadow-sm border border-slate-100">
@@ -806,7 +810,7 @@
                                         <th className="p-4">#</th>
                                         <th className="p-4">Crew</th>
                                         <th className="p-4">Last Flown</th>
-                                        <th className="p-4 min-w-[180px]">Sorties ({period}d)</th>
+                                        <th className="p-4 min-w-[180px]">Sorties ({periodShort(period)})</th>
                                         <th className="p-4 min-w-[230px]">30-Day Time (manual)</th>
                                         {sorted.map(b => <th key={b.id} className="p-4"><BucketDot color={b.color} className="mr-1" />{b.name}</th>)}
                                     </tr>
@@ -862,14 +866,14 @@
                                             <BucketDot color={b.color} />
                                             {b.name}
                                             <span className="font-mono text-xs text-slate-500 font-semibold">{formatMilTime(b.start)}-{formatMilTime(b.end)}</span>
-                                            <span className="ml-auto text-xs text-slate-500 font-semibold">{designated.length ? `${designated.length} crews` : 'all crews'} · avg {bAvg.toFixed(1)} ({period}d)</span>
+                                            <span className="ml-auto text-xs text-slate-500 font-semibold">{designated.length ? `${designated.length} crews` : 'all crews'} · avg {bAvg.toFixed(1)} ({periodShort(period)})</span>
                                         </div>
                                         <table className="w-full text-left border-collapse">
                                             <thead>
                                                 <tr className="bg-slate-50 border-b border-slate-200 text-slate-500 text-xs uppercase tracking-wider font-bold">
                                                     <th className="p-3">Crew</th>
                                                     <th className="p-3">Last in bucket</th>
-                                                    <th className="p-3">Sorties ({period}d)</th>
+                                                    <th className="p-3">Sorties ({periodShort(period)})</th>
                                                 </tr>
                                             </thead>
                                             <tbody className="divide-y divide-slate-100">
@@ -903,7 +907,7 @@
                                         </table>
                                         {outsiders.length > 0 && (
                                             <div className="px-4 py-2 border-t border-slate-100 text-xs text-slate-500">
-                                                Also flew here ({period}d, not assigned): {outsiders.map(r => `${r.crew.crewName} (${r.perBucket[b.id]})`).join(', ')}
+                                                Also flew here ({periodShort(period)}, not assigned): {outsiders.map(r => `${r.crew.crewName} (${r.perBucket[b.id]})`).join(', ')}
                                             </div>
                                         )}
                                     </div>
@@ -950,7 +954,7 @@
                             const others = available.filter(s => !designated.includes(s.crew.id));
                             const optionFor = (s) => (
                                 <option key={s.crew.id} value={s.crew.id}>
-                                    {s.crew.crewName} — {sinceLabel(s.daysSince)}, {s.sorties} in {period}d
+                                    {s.crew.crewName} — {sinceLabel(s.daysSince)}, {s.sorties} in {periodShort(period)}
                                 </option>
                             );
                             return (
@@ -1320,7 +1324,7 @@
                 const stats = rankByFairness(computeCrewStats(crews, buckets, log, asOf, true, period));
                 const entries = collectGarEntries(crews, gar, notes, buckets, asOf, garFlags);
                 const rotation = computeGarRotation(crews, entries, asOf);
-                const from = addDays(asOf, -period + 1);
+                const from = period === 'all' ? '0000-00-00' : addDays(asOf, -period + 1);
                 const flightNotes = [];
                 Object.entries(notes).forEach(([key, text]) => {
                     const [d, bucketId, crewId] = key.split('|');
@@ -1329,7 +1333,7 @@
                     flightNotes.push({ date: d, bucket: bucket.name, crew: crewName[crewId], text });
                 });
                 flightNotes.sort((a, b) => b.date.localeCompare(a.date));
-                const windowStart = addDays(asOf, -period);
+                const windowStart = periodStart(asOf, period);
                 const totals = Object.fromEntries(rotation.map(r => [r.crew.id, r.total]));
                 const garInWindow = {};
                 entries.forEach(e => { if (e.date > windowStart) garInWindow[e.crewId] = (garInWindow[e.crewId] || 0) + 1; });
@@ -1347,7 +1351,7 @@
             const text = useMemo(() => {
                 const L = [];
                 if (view === 'glance') {
-                    L.push(`${title.toUpperCase()}`, `As of ${prettyDate(asOf)} · last ${period} days`);
+                    L.push(`${title.toUpperCase()}`, `As of ${prettyDate(asOf)} · ${periodLong(period)}`);
                     if (message.trim()) L.push('', message.trim());
                     L.push('');
                     if (data.flyNext) L.push(`FLY NEXT: ${data.flyNext.crew.crewName} (${data.flyNext.last ? `last flew ${sinceLabel(data.flyNext.daysSince).toLowerCase()}` : 'has not flown'})`);
@@ -1364,7 +1368,7 @@
                     return L.join('\n');
                 }
                 L.push(`${title.toUpperCase()}`);
-                L.push(`As of ${prettyDate(asOf)} · last ${period} days`);
+                L.push(`As of ${prettyDate(asOf)} · ${periodLong(period)}`);
                 if (message.trim()) L.push('', message.trim());
                 if (inc.flying) {
                     L.push('', 'FLYING — longest gap first');
@@ -1373,10 +1377,10 @@
                 if (inc.charts) {
                     const bar = (v, max) => '█'.repeat(max ? Math.round((v / max) * 20) : 0);
                     const sMax = Math.max(0, ...data.sortieRows.map(r => r.value));
-                    L.push('', `SORTIES FLOWN — last ${period} days`);
+                    L.push('', `SORTIES FLOWN — ${periodLong(period)}`);
                     data.sortieRows.forEach(r => L.push(`${r.crew.crewName}  ${bar(r.value, sMax)} ${r.value}`));
                     const gMax = Math.max(0, ...data.garRows.map(r => r.value));
-                    L.push('', `GARs FILLED — last ${period} days (all-time in brackets)`);
+                    L.push('', `GARs FILLED — ${periodLong(period)} (all-time in brackets)`);
                     data.garRows.forEach(r => L.push(`${r.crew.crewName}  ${bar(r.value, gMax)} ${r.value} (${r.total})`));
                 }
                 if (inc.buckets) {
@@ -1477,7 +1481,7 @@
 
                     <div id="report-sheet" className="rp-sheet">
                         <h1>{title || 'Crew Flying Report'}</h1>
-                        <div className="rp-sub">As of {prettyDate(asOf)} · flying over the last {period} days ({data.from} to {asOf})</div>
+                        <div className="rp-sub">As of {prettyDate(asOf)} · {period === 'all' ? 'flying over all time' : `flying over the last ${period} days (${data.from} to ${asOf})`}</div>
                         {message.trim() && <div className="rp-msg">{message.trim()}</div>}
 
                         {view === 'glance' && (
@@ -1513,7 +1517,7 @@
                                     </div>
                                 )}
                                 <table className="rp-glance" style={{ marginTop: 18 }}>
-                                    <thead><tr><th>Crew</th><th>Last flown</th><th>Sorties ({period}d)</th><th>GARs ({period}d)</th></tr></thead>
+                                    <thead><tr><th>Crew</th><th>Last flown</th><th>Sorties ({periodShort(period)})</th><th>GARs ({periodShort(period)})</th></tr></thead>
                                     <tbody>
                                         {data.glanceRows.map((r, i) => {
                                             const sMax = Math.max(1, ...data.glanceRows.map(x => x.sorties));
@@ -1556,9 +1560,9 @@
 
                         {inc.charts && (
                             <>
-                                <h2>Sorties flown — last {period} days</h2>
+                                <h2>Sorties flown — {periodLong(period)}</h2>
                                 <BarChart rows={data.sortieRows} color="#2563eb" />
-                                <h2>GARs filled — last {period} days</h2>
+                                <h2>GARs filled — {periodLong(period)}</h2>
                                 <BarChart rows={data.garRows} color="#d97706" valueText={r => `(${r.total} all-time)`} />
                             </>
                         )}
@@ -1689,7 +1693,7 @@
             const [notes, setNotes] = useState(() => cloud ? {} : loadStored('flyfair_notes', {}));
             const [garFlags, setGarFlags] = useState(() => cloud ? {} : loadStored('flyfair_garflags', {}));
             const [gar, setGar] = useState(() => cloud ? {} : loadStored('flyfair_gar', buildSeedGar()));
-            const [period, setPeriod] = useState(() => loadStored('flyfair_period', 30));
+            const [period, setPeriod] = useState(() => { const v = loadStored('flyfair_period', 30); return PERIODS.includes(v) ? v : 30; });
             const [selectedDate, setSelectedDate] = useState(todayStr());
 
             const [isDark, setIsDark] = useState(() => document.documentElement.classList.contains('dark'));
