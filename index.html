@@ -153,6 +153,7 @@
         .rp-sheet .rp-green { background: #dcfce7; color: #15803d; }
         .rp-sheet .rp-tag { display: inline-block; margin-left: 6px; padding: 1px 7px; border-radius: 4px; background: #1d4ed8; color: #fff; font-size: 10px; font-weight: 800; letter-spacing: .05em; vertical-align: middle; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
         .rp-sheet .rp-tag.rp-tag-gar { background: #d97706; }
+        .rp-sheet .rp-tag.rp-tag-off { background: #94a3b8; }
         .rp-sheet .rp-mini { display: inline-block; height: 12px; border-radius: 3px; vertical-align: middle; margin-right: 6px; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
         .rp-sheet .rp-buckets { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 6px; }
         .rp-sheet .rp-bkt { flex: 1 1 190px; border: 1px solid #cbd5e1; border-radius: 8px; padding: 6px 10px; break-inside: avoid; }
@@ -398,6 +399,10 @@
 
         const noteKey = (date, bucketId, crewId) => `${date}|${bucketId}|${crewId}`;
 
+        // A crew marked unavailable (optionally "until" a date, inclusive) is left out of every "next up" / "longest gap" pick.
+        const isUnavailable = (crew, asOf) => !!(crew && crew.unavail && (!crew.unavail.until || asOf <= crew.unavail.until));
+        const UnavailTag = ({ className = '' }) => <span className={`bg-amber-50 text-amber-700 border border-amber-200 text-[10px] uppercase font-bold px-1.5 py-0.5 rounded whitespace-nowrap ${className}`}>Unavailable</span>;
+
         const loadStored = (key, fallback) => {
             try {
                 const raw = localStorage.getItem(key);
@@ -485,12 +490,14 @@
             return Object.values(stats).map(s => ({
                 ...s,
                 daysSince: s.last ? daysBetween(s.last, asOf) : null,
+                unavailable: isUnavailable(s.crew, asOf),
                 daysSinceByBucket: Object.fromEntries(Object.entries(s.lastByBucket).map(([id, d]) => [id, daysBetween(d, asOf)]))
             }));
         };
 
         // Longest gap first (never flown = top), then fewest sorties in the period, then name.
         const rankByFairness = (stats) => [...stats].sort((a, b) => {
+            if (a.unavailable !== b.unavailable) return a.unavailable ? 1 : -1;
             const da = a.daysSince === null ? Infinity : a.daysSince;
             const db = b.daysSince === null ? Infinity : b.daysSince;
             if (da !== db) return db - da;
@@ -509,7 +516,8 @@
                 if (!r.last || d > r.last) r.last = d;
             });
             const onToday = new Set(entries.filter(x => x.date === asOf).map(x => x.crewId));
-            return Object.values(byCrew).map(r => ({ ...r, daysSince: r.last ? daysBetween(r.last, asOf) : null })).sort((a, b) => {
+            return Object.values(byCrew).map(r => ({ ...r, daysSince: r.last ? daysBetween(r.last, asOf) : null, unavailable: isUnavailable(r.crew, asOf) })).sort((a, b) => {
+                if (a.unavailable !== b.unavailable) return a.unavailable ? 1 : -1;
                 const ga = onToday.has(a.crew.id) ? 1 : 0;
                 const gb = onToday.has(b.crew.id) ? 1 : 0;
                 if (ga !== gb) return ga - gb;
@@ -527,6 +535,7 @@
             const inBucket = designated.length ? stats.filter(r => designated.includes(r.crew.id)) : stats;
             const outsiders = designated.length ? stats.filter(r => !designated.includes(r.crew.id) && (r.perBucket[bucket.id] || 0) > 0) : [];
             const rows = [...inBucket].sort((x, y) => {
+                if (x.unavailable !== y.unavailable) return x.unavailable ? 1 : -1;
                 const dx = x.daysSinceByBucket[bucket.id] ?? Infinity;
                 const dy = y.daysSinceByBucket[bucket.id] ?? Infinity;
                 if (dx !== dy) return dy - dx;
@@ -611,6 +620,9 @@
         const CrewForm = ({ initialData, onSave, onCancel }) => {
             const [crewName, setCrewName] = useState(initialData?.crewName || '');
             const [members, setMembers] = useState(initialData?.members || [{ id: generateId(), name: '', role: 'Aircraft Commander (AC)' }]);
+            const [away, setAway] = useState(() => isUnavailable(initialData, todayStr()));
+            const [awayReason, setAwayReason] = useState(initialData?.unavail?.reason || '');
+            const [awayUntil, setAwayUntil] = useState(initialData?.unavail?.until || '');
 
             const updateMember = (index, field, value) => {
                 setMembers(members.map((m, i) => i === index ? { ...m, [field]: value } : m));
@@ -620,7 +632,8 @@
 
             const handleSubmit = (e) => {
                 e.preventDefault();
-                onSave({ id: initialData?.id || generateId(), crewName, members });
+                // keep everything else stored on the crew (30-day time, order) when editing
+                onSave({ ...(initialData || {}), id: initialData?.id || generateId(), crewName, members, unavail: away ? { reason: awayReason.trim(), until: awayUntil } : undefined });
             };
 
             return (
@@ -648,6 +661,28 @@
                                 </div>
                             ))}
                         </div>
+                    </div>
+
+                    <div className="bg-slate-50 p-4 rounded-xl border border-slate-200 space-y-3">
+                        <label className="flex items-center gap-2 text-sm font-bold text-slate-800 cursor-pointer">
+                            <input type="checkbox" checked={away} onChange={e => setAway(e.target.checked)} className="w-4 h-4" />
+                            Currently unavailable
+                        </label>
+                        <p className="text-xs text-slate-500">An unavailable crew is skipped in every "Next up" and "Longest gap" pick, but keeps their flying history.</p>
+                        {away && (
+                            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                                <div>
+                                    <label className="block text-xs font-bold text-slate-600 mb-1">Reason (optional)</label>
+                                    <input type="text" maxLength={80} value={awayReason} onChange={e => setAwayReason(e.target.value)} placeholder="e.g. TDY, leave"
+                                        className="w-full text-sm border border-slate-300 rounded-lg p-2 focus:ring-2 focus:ring-blue-500 outline-none" />
+                                </div>
+                                <div>
+                                    <label className="block text-xs font-bold text-slate-600 mb-1">Back on (optional)</label>
+                                    <input type="date" value={awayUntil} onChange={e => setAwayUntil(e.target.value)}
+                                        className="w-full text-sm border border-slate-300 rounded-lg p-2 focus:ring-2 focus:ring-blue-500 outline-none" />
+                                </div>
+                            </div>
+                        )}
                     </div>
 
                     <div className="flex justify-end gap-3 pt-4 border-t border-slate-200">
@@ -761,7 +796,7 @@
             const avg = stats.length ? totalSorties / stats.length : 0;
             const maxSorties = Math.max(1, ...stats.map(s => s.sorties));
             const spread = stats.length ? Math.max(...stats.map(s => s.sorties)) - Math.min(...stats.map(s => s.sorties)) : 0;
-            const longestGap = stats[0];
+            const longestGap = stats.find(r => !r.unavailable);
 
             return (
                 <div className="space-y-6">
@@ -779,8 +814,9 @@
                             <div className="grid grid-cols-2 xl:grid-cols-4 gap-3">
                                 {sorted.map(b => {
                                     const { rows } = bucketBreakdown(b, stats, crews);
-                                    const next = rows[0];
-                                    const then = rows[1];
+                                    const avail = rows.filter(r => !r.unavailable);
+                                    const next = avail[0];
+                                    const then = avail[1];
                                     const d = next ? next.daysSinceByBucket[b.id] : undefined;
                                     return (
                                         <div key={b.id} className="bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden">
@@ -790,7 +826,7 @@
                                             </div>
                                             <div className="p-3 sm:p-4">
                                                 <p className="text-[10px] font-bold uppercase tracking-widest text-slate-400">Next up</p>
-                                                <h4 className="text-base sm:text-lg font-black text-blue-700 leading-tight">{next ? next.crew.crewName : 'No crews'}</h4>
+                                                <h4 className="text-base sm:text-lg font-black text-blue-700 leading-tight">{next ? next.crew.crewName : (rows.length ? 'No one available' : 'No crews')}</h4>
                                                 {next && <p className="text-xs text-slate-500 mt-0.5">{d === undefined ? 'Never flown this bucket' : `Last in this bucket ${sinceLabel(d).toLowerCase()}`}</p>}
                                                 {then && <p className="text-xs text-slate-400 mt-2">Then: {then.crew.crewName}</p>}
                                             </div>
@@ -805,7 +841,7 @@
                         <div className="bg-white p-4 rounded-xl shadow-sm border border-slate-100">
                             <p className="text-sm font-medium text-slate-500">Longest Gap</p>
                             <h3 className="text-base sm:text-lg font-bold text-blue-700 mt-1 leading-tight">{longestGap ? longestGap.crew.crewName : '—'}</h3>
-                            <p className="text-xs text-slate-500 mt-1">{longestGap ? sinceLabel(longestGap.daysSince) : 'Add a crew to begin'}</p>
+                            <p className="text-xs text-slate-500 mt-1">{longestGap ? sinceLabel(longestGap.daysSince) : (stats.length ? 'No one is available' : 'Add a crew to begin')}</p>
                         </div>
                         <div className="bg-white p-4 rounded-xl shadow-sm border border-slate-100">
                             <p className="text-sm font-medium text-slate-500">Sorties ({periodShort(period)})</p>
@@ -835,7 +871,7 @@
                                             <span className="text-sm font-bold text-slate-400 w-4 pt-0.5">{idx + 1}</span>
                                             <div className="flex-1 min-w-0">
                                                 <div className="flex items-center justify-between gap-2">
-                                                    <span className="font-black text-slate-800 truncate">{s.crew.crewName}</span>
+                                                    <span className="font-black text-slate-800 truncate">{s.crew.crewName}{s.unavailable && <UnavailTag className="ml-2" />}</span>
                                                     <span className={`text-xs font-bold px-2 py-0.5 rounded-full border whitespace-nowrap ${tone}`}>{s.last ? sinceLabel(s.daysSince) : 'Never'}</span>
                                                 </div>
                                                 <div className="mt-2 flex items-center gap-2">
@@ -873,7 +909,7 @@
                                         return (
                                             <tr key={s.crew.id} className="hover:bg-slate-50/80 transition-colors">
                                                 <td className="px-4 py-3 text-sm font-bold text-slate-400">{idx + 1}</td>
-                                                <td className="px-4 py-3 font-black text-slate-800">{s.crew.crewName}</td>
+                                                <td className="px-4 py-3 font-black text-slate-800">{s.crew.crewName}{s.unavailable && <UnavailTag className="ml-2" />}</td>
                                                 <td className="px-4 py-3">
                                                     <div className={`text-sm font-bold ${gapColor}`}>{sinceLabel(s.daysSince)}</div>
                                                     {s.last && <div className="text-xs text-slate-500 font-mono">{s.last}</div>}
@@ -934,7 +970,7 @@
                                                     const diff = n - bAvg;
                                                     return (
                                                         <tr key={r.crew.id} className="hover:bg-slate-50/80">
-                                                            <td className="p-3 text-sm font-bold text-slate-800">{r.crew.crewName}</td>
+                                                            <td className="p-3 text-sm font-bold text-slate-800">{r.crew.crewName}{r.unavailable && <UnavailTag className="ml-2" />}</td>
                                                             <td className="p-3">
                                                                 <div className={`text-sm font-bold ${d === undefined || d >= 14 ? 'text-red-700' : d >= 7 ? 'text-amber-700' : 'text-slate-700'}`}>{d === undefined ? 'Never in this bucket' : sinceLabel(d)}</div>
                                                                 {r.lastByBucket[b.id] && <div className="text-xs text-slate-500 font-mono">{r.lastByBucket[b.id]}</div>}
@@ -999,13 +1035,13 @@
                             const assigned = dayLog[bucket.id] || [];
                             const available = orderedCrews.filter(s => !assigned.includes(s.crew.id));
                             const designated = designatedIds(bucket, crews);
-                            const nextUp = bucketBreakdown(bucket, orderedCrews, crews).rows.find(r => !assigned.includes(r.crew.id));
+                            const nextUp = bucketBreakdown(bucket, orderedCrews, crews).rows.find(r => !r.unavailable && !assigned.includes(r.crew.id));
                             const nextGap = nextUp ? nextUp.daysSinceByBucket[bucket.id] : undefined;
                             const mine = available.filter(s => designated.includes(s.crew.id));
                             const others = available.filter(s => !designated.includes(s.crew.id));
                             const optionFor = (s) => (
                                 <option key={s.crew.id} value={s.crew.id}>
-                                    {s.crew.crewName} — {sinceLabel(s.daysSince)}, {s.sorties} in {periodShort(period)}
+                                    {s.crew.crewName}{s.unavailable ? ' (unavailable)' : ''} — {sinceLabel(s.daysSince)}, {s.sorties} in {periodShort(period)}
                                 </option>
                             );
                             return (
@@ -1218,7 +1254,7 @@
             const history = entries;
             const crewMap = Object.fromEntries(crews.map(c => [c.id, c]));
             const onAlert = entries.filter(x => x.date === today).map(x => crewMap[x.crewId].crewName);
-            const nextUp = rotation[0];
+            const nextUp = rotation.find(r => !r.unavailable);
             const existing = gar[date];
             const maxTotal = Math.max(1, ...rotation.map(r => r.total));
 
@@ -1244,7 +1280,7 @@
                         <div className="bg-white p-5 rounded-xl shadow-sm border border-slate-100">
                             <p className="text-sm font-medium text-slate-500">Next Up</p>
                             <h3 className="text-xl font-bold text-blue-700 mt-1">{nextUp ? nextUp.crew.crewName : '—'}</h3>
-                            <p className="text-xs text-slate-500 mt-1">{nextUp ? (nextUp.last ? `Last GAR ${sinceLabel(nextUp.daysSince)}` : 'Has not done a GAR') : 'Add a crew to begin'}</p>
+                            <p className="text-xs text-slate-500 mt-1">{nextUp ? (nextUp.last ? `Last GAR ${sinceLabel(nextUp.daysSince)}` : 'Has not done a GAR') : (rotation.length ? 'No one is available' : 'Add a crew to begin')}</p>
                         </div>
                         <div className="bg-white p-5 rounded-xl shadow-sm border border-slate-100">
                             <p className="text-sm font-medium text-slate-500">GARs Logged</p>
@@ -1269,11 +1305,12 @@
                                     </thead>
                                     <tbody className="divide-y divide-slate-100">
                                         {rotation.map((r, idx) => (
-                                            <tr key={r.crew.id} className={idx === 0 ? 'bg-blue-50/50' : ''}>
+                                            <tr key={r.crew.id} className={nextUp && r.crew.id === nextUp.crew.id ? 'bg-blue-50/50' : ''}>
                                                 <td className="p-4 text-sm font-bold text-slate-400">{idx + 1}</td>
                                                 <td className="p-4 font-black text-slate-800">
                                                     {r.crew.crewName}
-                                                    {idx === 0 && <span className="ml-2 bg-blue-600 text-white text-[10px] uppercase font-bold px-2 py-0.5 rounded">Next up</span>}
+                                                    {nextUp && r.crew.id === nextUp.crew.id && <span className="ml-2 bg-blue-600 text-white text-[10px] uppercase font-bold px-2 py-0.5 rounded">Next up</span>}
+                                                    {r.unavailable && <UnavailTag className="ml-2" />}
                                                 </td>
                                                 <td className="p-4">
                                                     <div className={`text-sm font-bold ${r.daysSince === null ? 'text-red-700' : r.daysSince >= 14 ? 'text-amber-700' : 'text-slate-700'}`}>{r.last ? sinceLabel(r.daysSince) : 'Never'}</div>
@@ -1306,7 +1343,7 @@
                                     <select required value={crewId} onChange={e => setCrewId(e.target.value)}
                                         className="w-full text-sm border border-slate-300 rounded-lg p-2 focus:ring-2 focus:ring-blue-500 outline-none">
                                         <option value="">Select crew (next up first)…</option>
-                                        {rotation.map(r => <option key={r.crew.id} value={r.crew.id}>{r.crew.crewName} — {r.last ? sinceLabel(r.daysSince) : 'never'}, {r.total} total</option>)}
+                                        {rotation.map(r => <option key={r.crew.id} value={r.crew.id}>{r.crew.crewName}{r.unavailable ? ' (unavailable)' : ''} — {r.last ? sinceLabel(r.daysSince) : 'never'}, {r.total} total</option>)}
                                     </select>
                                 </div>
                                 <input type="text" maxLength={200} value={note} onChange={e => setNote(e.target.value)} placeholder="Note (optional)"
@@ -1392,8 +1429,8 @@
                 const sortieRows = stats.map(s => ({ crew: s.crew, value: s.sorties })).sort((a, b) => b.value - a.value || byName(a, b));
                 const garRows = crews.map(c => ({ crew: c, value: garInWindow[c.id] || 0, total: totals[c.id] || 0 })).sort((a, b) => b.value - a.value || b.total - a.total || byName(a, b));
                 const rotById = Object.fromEntries(rotation.map(r => [r.crew.id, r]));
-                const glanceRows = stats.map(s => ({ crew: s.crew, last: s.last, daysSince: s.daysSince, sorties: s.sorties, garWin: garInWindow[s.crew.id] || 0, garLast: rotById[s.crew.id].last, garDays: rotById[s.crew.id].daysSince, time30: s.crew.time30 }));
-                return { stats, entries, rotation, from, flightNotes, sortieRows, garRows, glanceRows, flyNext: stats[0], garNext: rotation[0], perBucket: sorted.map(b => ({ bucket: b, ...bucketBreakdown(b, stats, crews) })) };
+                const glanceRows = stats.map(s => ({ crew: s.crew, last: s.last, daysSince: s.daysSince, sorties: s.sorties, garWin: garInWindow[s.crew.id] || 0, garLast: rotById[s.crew.id].last, garDays: rotById[s.crew.id].daysSince, time30: s.crew.time30, unavailable: s.unavailable }));
+                return { stats, entries, rotation, from, flightNotes, sortieRows, garRows, glanceRows, flyNext: stats.find(r => !r.unavailable), garNext: rotation.find(r => !r.unavailable), perBucket: sorted.map(b => ({ bucket: b, ...bucketBreakdown(b, stats, crews) })) };
             }, [crews, buckets, log, notes, gar, garFlags, asOf, period]);
 
             const time30Text = (c) => c.time30 && c.time30.hours !== '' && c.time30.hours != null ? `${c.time30.hours} h${c.time30.asOf ? ` (as of ${c.time30.asOf})` : ''}` : '—';
@@ -1410,7 +1447,7 @@
                     if (data.perBucket.length) {
                         L.push('', 'NEXT UP BY BUCKET');
                         data.perBucket.forEach(({ bucket, rows }) => {
-                            const n = rows[0];
+                            const n = rows.find(r => !r.unavailable);
                             L.push(`${bucket.name} (${formatMilTime(bucket.start)}-${formatMilTime(bucket.end)}Z): ${n ? `${n.crew.crewName} — ${n.daysSinceByBucket[bucket.id] === undefined ? 'never in this bucket' : `last in bucket ${sinceLabel(n.daysSinceByBucket[bucket.id]).toLowerCase()}`}` : '—'}`);
                         });
                     }
@@ -1554,7 +1591,7 @@
                                         <div className="rp-kicker" style={{ fontSize: 11, fontWeight: 800, letterSpacing: '.08em', textTransform: 'uppercase', color: '#475569' }}>Next up by bucket</div>
                                         <div className="rp-buckets">
                                             {data.perBucket.map(({ bucket, rows }) => {
-                                                const n = rows[0];
+                                                const n = rows.find(r => !r.unavailable);
                                                 const d = n ? n.daysSinceByBucket[bucket.id] : undefined;
                                                 return (
                                                     <div key={bucket.id} className="rp-bkt">
@@ -1575,7 +1612,7 @@
                                             const tone = r.daysSince === null || r.daysSince >= 14 ? 'rp-red' : r.daysSince >= 7 ? 'rp-amber' : 'rp-green';
                                             return (
                                                 <tr key={r.crew.id}>
-                                                    <td><strong>{r.crew.crewName}</strong>{i === 0 && <span className="rp-tag">FLY NEXT</span>}{data.garNext && data.garNext.crew.id === r.crew.id && <span className="rp-tag rp-tag-gar">GAR NEXT</span>}</td>
+                                                    <td><strong>{r.crew.crewName}</strong>{data.flyNext && data.flyNext.crew.id === r.crew.id && <span className="rp-tag">FLY NEXT</span>}{r.unavailable && <span className="rp-tag rp-tag-off">UNAVAILABLE</span>}{data.garNext && data.garNext.crew.id === r.crew.id && <span className="rp-tag rp-tag-gar">GAR NEXT</span>}</td>
                                                     <td><span className={`rp-pill ${tone}`}>{r.last ? sinceLabel(r.daysSince) : 'Never'}</span></td>
                                                     <td><span className="rp-mini" style={{ width: `${(r.sorties / sMax) * 80}px`, minWidth: r.sorties ? 4 : 0, background: '#2563eb' }}></span><strong>{r.sorties}</strong></td>
                                                     <td><strong>{r.garWin}</strong>{r.garLast ? <span className="rp-muted"> · last {sinceLabel(r.garDays).toLowerCase()}</span> : <span className="rp-muted"> · none yet</span>}</td>
@@ -1652,7 +1689,7 @@
                                         {data.rotation.map((r, i) => (
                                             <tr key={r.crew.id}>
                                                 <td className="rp-muted">{i + 1}</td>
-                                                <td><strong>{r.crew.crewName}</strong>{i === 0 && <span className="rp-next"> · next up</span>}</td>
+                                                <td><strong>{r.crew.crewName}</strong>{data.garNext && data.garNext.crew.id === r.crew.id && <span className="rp-next"> · next up</span>}{r.unavailable && <span className="rp-muted"> · unavailable</span>}</td>
                                                 <td className={r.last ? '' : 'rp-flag'}>{r.last ? `${r.last} (${sinceLabel(r.daysSince).toLowerCase()})` : 'no GAR yet'}</td>
                                                 <td className="rp-num">{r.total}</td>
                                             </tr>
@@ -2544,7 +2581,15 @@
                                     columns={['Crew', 'Members']}
                                     renderRow={(crew) => (
                                         <>
-                                            <td className="p-4 font-black text-slate-800 text-base">{crew.crewName}</td>
+                                            <td className="p-4 font-black text-slate-800 text-base">
+                                                {crew.crewName}
+                                                {isUnavailable(crew, todayStr()) && <div className="mt-1"><UnavailTag /> <span className="text-xs font-semibold text-slate-500">{[crew.unavail.until && `back ${crew.unavail.until}`, crew.unavail.reason].filter(Boolean).join(' · ')}</span></div>}
+                                                {canEdit && (
+                                                    <button onClick={() => handleUpdateCrew(crew.id, { unavail: isUnavailable(crew, todayStr()) ? undefined : { reason: '', until: '' } })} className="block mt-1 text-xs font-semibold text-slate-400 hover:text-blue-600">
+                                                        {isUnavailable(crew, todayStr()) ? 'Mark available' : 'Mark unavailable'}
+                                                    </button>
+                                                )}
+                                            </td>
                                             <td className="p-4">
                                                 <div className="space-y-1">
                                                     {crew.members.map(m => (
