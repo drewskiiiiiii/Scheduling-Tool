@@ -508,16 +508,18 @@
         // Up-next order for the 24-hour GAR: never-done first, then longest since last GAR, then fewest total.
         // Whoever is on GAR today (asOf) goes to the bottom of this order only.
         const computeGarRotation = (crews, entries, asOf) => {
-            const byCrew = Object.fromEntries(crews.map(c => [c.id, { crew: c, last: null, total: 0 }]));
+            const byCrew = Object.fromEntries(crews.map(c => [c.id, { crew: c, last: null, total: 0, next: null }]));
             entries.forEach(({ date: d, crewId: id }) => {
                 const r = byCrew[id];
                 if (!r) return;
+                if (d > asOf) { if (!r.next || d < r.next) r.next = d; return; } // already scheduled for a later GAR
                 r.total += 1;
                 if (!r.last || d > r.last) r.last = d;
             });
             const onToday = new Set(entries.filter(x => x.date === asOf).map(x => x.crewId));
             return Object.values(byCrew).map(r => ({ ...r, daysSince: r.last ? daysBetween(r.last, asOf) : null, unavailable: isUnavailable(r.crew, asOf) })).sort((a, b) => {
                 if (a.unavailable !== b.unavailable) return a.unavailable ? 1 : -1;
+                if (!!a.next !== !!b.next) return a.next ? 1 : -1; // crews already scheduled come after those still waiting
                 const ga = onToday.has(a.crew.id) ? 1 : 0;
                 const gb = onToday.has(b.crew.id) ? 1 : 0;
                 if (ga !== gb) return ga - gb;
@@ -1247,20 +1249,24 @@
             const [crewId, setCrewId] = useState('');
             const [note, setNote] = useState('');
 
-            const entries = useMemo(() => collectGarEntries(crews, gar, notes, buckets, today, garFlags), [crews, gar, notes, buckets, today, garFlags]);
+            // every GAR, including ones scheduled for later days
+            const allEntries = useMemo(() => collectGarEntries(crews, gar, notes, buckets, '9999-12-31', garFlags), [crews, gar, notes, buckets, garFlags]);
+            const entries = useMemo(() => allEntries.filter(e => e.date <= today), [allEntries, today]);
+            const upcoming = useMemo(() => allEntries.filter(e => e.date > today).sort((a, b) => a.date.localeCompare(b.date)), [allEntries, today]);
 
-            const rotation = useMemo(() => computeGarRotation(crews, entries, today), [crews, entries, today]);
+            const rotation = useMemo(() => computeGarRotation(crews, allEntries, today), [crews, allEntries, today]);
 
             const history = entries;
             const crewMap = Object.fromEntries(crews.map(c => [c.id, c]));
             const onAlert = entries.filter(x => x.date === today).map(x => crewMap[x.crewId].crewName);
             const nextUp = rotation.find(r => !r.unavailable);
+            const nextScheduled = upcoming[0];
             const existing = gar[date];
             const maxTotal = Math.max(1, ...rotation.map(r => r.total));
 
             const submit = (e) => {
                 e.preventDefault();
-                if (!crewId || !date || date > today) return;
+                if (!crewId || !date) return;
                 onLog(date, crewId, note.trim());
                 setNote('');
             };
@@ -1269,20 +1275,25 @@
                 <div className="space-y-6">
                     <div>
                         <h2 className="text-2xl font-bold text-slate-800">Ground Alert (GAR)</h2>
-                        <p className="text-sm text-slate-500 mt-1">Every crew rotates through a 24-hour ground alert. The crew that has gone longest without one is next up. Crews marked GAR in the Flying Log are counted automatically.</p>
+                        <p className="text-sm text-slate-500 mt-1">Every crew rotates through a 24-hour ground alert. The crew that has gone longest without one is next up, and crews already scheduled for a later GAR come after those still waiting. Crews marked GAR in the Flying Log are counted automatically, including future days.</p>
                     </div>
 
-                    <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                        <div className="bg-white p-5 rounded-xl shadow-sm border border-slate-100">
+                    <div className="grid grid-cols-2 xl:grid-cols-4 gap-3">
+                        <div className="bg-white p-4 rounded-xl shadow-sm border border-slate-100">
                             <p className="text-sm font-medium text-slate-500">On GAR Today</p>
                             <h3 className="text-xl font-bold text-slate-800 mt-1">{onAlert.length ? onAlert.join(', ') : 'None logged'}</h3>
                         </div>
-                        <div className="bg-white p-5 rounded-xl shadow-sm border border-slate-100">
-                            <p className="text-sm font-medium text-slate-500">Next Up</p>
-                            <h3 className="text-xl font-bold text-blue-700 mt-1">{nextUp ? nextUp.crew.crewName : '—'}</h3>
-                            <p className="text-xs text-slate-500 mt-1">{nextUp ? (nextUp.last ? `Last GAR ${sinceLabel(nextUp.daysSince)}` : 'Has not done a GAR') : (rotation.length ? 'No one is available' : 'Add a crew to begin')}</p>
+                        <div className="bg-white p-4 rounded-xl shadow-sm border border-slate-100">
+                            <p className="text-sm font-medium text-slate-500">Next Scheduled</p>
+                            <h3 className="text-lg font-bold text-slate-800 mt-1 leading-tight">{nextScheduled ? crewMap[nextScheduled.crewId].crewName : 'None scheduled'}</h3>
+                            {nextScheduled && <p className="text-xs text-slate-500 mt-1">{prettyDate(nextScheduled.date)}</p>}
                         </div>
-                        <div className="bg-white p-5 rounded-xl shadow-sm border border-slate-100">
+                        <div className="bg-white p-4 rounded-xl shadow-sm border border-slate-100">
+                            <p className="text-sm font-medium text-slate-500">Next Up</p>
+                            <h3 className="text-lg font-bold text-blue-700 mt-1 leading-tight">{nextUp ? nextUp.crew.crewName : '—'}</h3>
+                            <p className="text-xs text-slate-500 mt-1">{nextUp ? (nextUp.next ? `Already scheduled ${nextUp.next}` : nextUp.last ? `Last GAR ${sinceLabel(nextUp.daysSince)}` : 'Has not done a GAR') : (rotation.length ? 'No one is available' : 'Add a crew to begin')}</p>
+                        </div>
+                        <div className="bg-white p-4 rounded-xl shadow-sm border border-slate-100">
                             <p className="text-sm font-medium text-slate-500">GARs Logged</p>
                             <h3 className="text-3xl font-bold text-slate-800 mt-1">{history.length}</h3>
                         </div>
@@ -1300,6 +1311,7 @@
                                             <th className="p-4">#</th>
                                             <th className="p-4">Crew</th>
                                             <th className="p-4">Last GAR</th>
+                                            <th className="p-4">Scheduled</th>
                                             <th className="p-4">Total GARs</th>
                                         </tr>
                                     </thead>
@@ -1316,6 +1328,7 @@
                                                     <div className={`text-sm font-bold ${r.daysSince === null ? 'text-red-700' : r.daysSince >= 14 ? 'text-amber-700' : 'text-slate-700'}`}>{r.last ? sinceLabel(r.daysSince) : 'Never'}</div>
                                                     {r.last && <div className="text-xs text-slate-500 font-mono">{r.last}</div>}
                                                 </td>
+                                                <td className="p-4">{r.next ? <span className="text-sm font-bold text-blue-700">{r.next}</span> : <span className="text-slate-400">—</span>}</td>
                                                 <td className="p-4">
                                                     <div className="flex items-center gap-3">
                                                         <div className="w-24 bg-slate-100 rounded-full h-2.5 overflow-hidden"><div className="bg-indigo-500 h-full" style={{ width: `${(r.total / maxTotal) * 100}%` }}></div></div>
@@ -1324,7 +1337,7 @@
                                                 </td>
                                             </tr>
                                         ))}
-                                        {rotation.length === 0 && <tr><td colSpan={4} className="p-8 text-center text-slate-400">No crews yet.</td></tr>}
+                                        {rotation.length === 0 && <tr><td colSpan={5} className="p-8 text-center text-slate-400">No crews yet.</td></tr>}
                                     </tbody>
                                 </table>
                             </div>
@@ -1332,10 +1345,10 @@
 
                         <div className="space-y-6">
                             {canEdit && <form onSubmit={submit} className="bg-white rounded-xl shadow-sm border border-slate-200 p-4 space-y-3">
-                                <h3 className="font-bold text-slate-700 uppercase tracking-wider text-sm">Log a GAR</h3>
+                                <h3 className="font-bold text-slate-700 uppercase tracking-wider text-sm">Log or schedule a GAR</h3>
                                 <div>
                                     <label className="block text-xs font-bold text-slate-600 mb-1">Date</label>
-                                    <input type="date" required max={today} value={date} onChange={e => setDate(e.target.value)}
+                                    <input type="date" required value={date} onChange={e => setDate(e.target.value)}
                                         className="w-full text-sm border border-slate-300 rounded-lg p-2 focus:ring-2 focus:ring-blue-500 outline-none" />
                                 </div>
                                 <div>
@@ -1349,8 +1362,27 @@
                                 <input type="text" maxLength={200} value={note} onChange={e => setNote(e.target.value)} placeholder="Note (optional)"
                                     className="w-full text-sm border border-slate-300 rounded-lg p-2 focus:ring-2 focus:ring-blue-500 outline-none" />
                                 {existing && crewMap[existing.crewId] && <p className="text-xs text-amber-700 font-semibold"><i className="fa-solid fa-triangle-exclamation mr-1"></i>{crewMap[existing.crewId].crewName} is already logged for this date; logging again replaces it.</p>}
-                                <button type="submit" disabled={!crewId || !date || date > today} className="w-full py-2 rounded-lg font-bold text-sm text-white bg-blue-600 hover:bg-blue-700 disabled:bg-slate-300">{existing ? 'Replace GAR' : 'Log GAR'}</button>
+                                <button type="submit" disabled={!crewId || !date} className="w-full py-2 rounded-lg font-bold text-sm text-white bg-blue-600 hover:bg-blue-700 disabled:bg-slate-300">{existing ? 'Replace GAR' : date > today ? 'Schedule GAR' : 'Log GAR'}</button>
                             </form>}
+
+                            {upcoming.length > 0 && (
+                                <div className="bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden">
+                                    <div className="p-4 border-b border-slate-200 bg-slate-50"><h3 className="font-bold text-slate-700 uppercase tracking-wider text-sm">Upcoming</h3></div>
+                                    <div className="divide-y divide-slate-100 max-h-[240px] overflow-y-auto">
+                                        {upcoming.map(e => (
+                                            <div key={e.id} className="px-4 py-3 flex items-center justify-between gap-2">
+                                                <div className="min-w-0">
+                                                    <div className="text-sm font-bold text-slate-800 truncate">{crewMap[e.crewId].crewName}</div>
+                                                    <div className="text-xs text-slate-500 font-mono">{prettyDate(e.date)} · in {daysBetween(today, e.date)} day{daysBetween(today, e.date) === 1 ? '' : 's'}</div>
+                                                    {e.note && <div className="text-xs text-slate-600 italic">{e.note}</div>}
+                                                    {e.source === 'log' && <div className="text-xs text-blue-700 font-semibold"><i className="fa-solid fa-calendar-days mr-1"></i>From Flying Log{e.bucketName ? ` (${e.bucketName})` : ''}</div>}
+                                                </div>
+                                                {e.source === 'manual' && canEdit && <button onClick={() => onRemove(e.date)} className="text-slate-400 hover:text-red-600 p-1" title="Remove"><i className="fa-solid fa-trash"></i></button>}
+                                            </div>
+                                        ))}
+                                    </div>
+                                </div>
+                            )}
 
                             <div className="bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden">
                                 <div className="p-4 border-b border-slate-200 bg-slate-50"><h3 className="font-bold text-slate-700 uppercase tracking-wider text-sm">History</h3></div>
@@ -1410,8 +1442,9 @@
 
             const data = useMemo(() => {
                 const stats = rankByFairness(computeCrewStats(crews, buckets, log, asOf, true, period));
-                const entries = collectGarEntries(crews, gar, notes, buckets, asOf, garFlags);
-                const rotation = computeGarRotation(crews, entries, asOf);
+                const allGar = collectGarEntries(crews, gar, notes, buckets, '9999-12-31', garFlags);
+                const entries = allGar.filter(e => e.date <= asOf);
+                const rotation = computeGarRotation(crews, allGar, asOf);
                 const from = period === 'all' ? '0000-00-00' : addDays(asOf, -period + 1);
                 const flightNotes = [];
                 Object.entries(notes).forEach(([key, text]) => {
@@ -1430,7 +1463,7 @@
                 const garRows = crews.map(c => ({ crew: c, value: garInWindow[c.id] || 0, total: totals[c.id] || 0 })).sort((a, b) => b.value - a.value || b.total - a.total || byName(a, b));
                 const rotById = Object.fromEntries(rotation.map(r => [r.crew.id, r]));
                 const glanceRows = stats.map(s => ({ crew: s.crew, last: s.last, daysSince: s.daysSince, sorties: s.sorties, garWin: garInWindow[s.crew.id] || 0, garLast: rotById[s.crew.id].last, garDays: rotById[s.crew.id].daysSince, time30: s.crew.time30, unavailable: s.unavailable }));
-                return { stats, entries, rotation, from, flightNotes, sortieRows, garRows, glanceRows, flyNext: stats.find(r => !r.unavailable), garNext: rotation.find(r => !r.unavailable), perBucket: sorted.map(b => ({ bucket: b, ...bucketBreakdown(b, stats, crews) })) };
+                return { stats, entries, rotation, from, flightNotes, sortieRows, garRows, glanceRows, flyNext: stats.find(r => !r.unavailable), garNext: rotation.find(r => !r.unavailable && !r.next) || rotation.find(r => !r.unavailable), perBucket: sorted.map(b => ({ bucket: b, ...bucketBreakdown(b, stats, crews) })) };
             }, [crews, buckets, log, notes, gar, garFlags, asOf, period]);
 
             const time30Text = (c) => c.time30 && c.time30.hours !== '' && c.time30.hours != null ? `${c.time30.hours} h${c.time30.asOf ? ` (as of ${c.time30.asOf})` : ''}` : '—';
@@ -1480,7 +1513,7 @@
                 }
                 if (inc.gar) {
                     L.push('', 'GAR — up-next order');
-                    data.rotation.forEach((r, i) => L.push(`${i + 1}. ${r.crew.crewName}: ${r.last ? `last GAR ${r.last} (${sinceLabel(r.daysSince).toLowerCase()})` : 'no GAR yet'} · ${r.total} total`));
+                    data.rotation.forEach((r, i) => L.push(`${i + 1}. ${r.crew.crewName}: ${r.last ? `last GAR ${r.last} (${sinceLabel(r.daysSince).toLowerCase()})` : 'no GAR yet'} · ${r.total} total${r.next ? ` · scheduled ${r.next}` : ''}`));
                 }
                 if (inc.garHistory && data.entries.length) {
                     L.push('', 'RECENT GARs');
@@ -1689,7 +1722,7 @@
                                         {data.rotation.map((r, i) => (
                                             <tr key={r.crew.id}>
                                                 <td className="rp-muted">{i + 1}</td>
-                                                <td><strong>{r.crew.crewName}</strong>{data.garNext && data.garNext.crew.id === r.crew.id && <span className="rp-next"> · next up</span>}{r.unavailable && <span className="rp-muted"> · unavailable</span>}</td>
+                                                <td><strong>{r.crew.crewName}</strong>{data.garNext && data.garNext.crew.id === r.crew.id && <span className="rp-next"> · next up</span>}{r.next && <span className="rp-muted"> · scheduled {r.next}</span>}{r.unavailable && <span className="rp-muted"> · unavailable</span>}</td>
                                                 <td className={r.last ? '' : 'rp-flag'}>{r.last ? `${r.last} (${sinceLabel(r.daysSince).toLowerCase()})` : 'no GAR yet'}</td>
                                                 <td className="rp-num">{r.total}</td>
                                             </tr>
@@ -2394,7 +2427,6 @@
             };
             const handleUpdateCrew = (id, patch) => setCrews(prev => prev.map(c => c.id === id ? { ...c, ...patch } : c));
             const handleLogGar = (date, crewId, note) => {
-                if (date > todayStr()) return;
                 setGar(prev => ({ ...prev, [date]: { crewId, note } }));
             };
             const handleRemoveGar = (date) => setGar(prev => { const next = { ...prev }; delete next[date]; return next; });
