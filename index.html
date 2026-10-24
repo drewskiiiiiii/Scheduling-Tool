@@ -216,6 +216,12 @@
         // (Email/Password enabled, users created, Firestore created, rules published); then set to true.
         const CLOUD_ENABLED = true;
 
+        // Viewer / Editor roles. When true, each sign-in chooses Viewer or Editor, and Editor is only offered to
+        // staff: accounts that have a document in the Firestore `staff` collection (document ID = the login email).
+        // Firestore rules enforce this on the server. Leave false until the rules and staff documents are in place.
+        const ROLES_ENABLED = false;
+        const STAFF_GROUP_NAME = 'Caddyshack Staff Personnel';
+
         // Crews type just a username; Firebase needs an email-shaped login, so one is filled in behind the scenes.
         const USERNAME_EMAIL_DOMAIN = 'crews.example.com';
         const usernameToEmail = (u) => {
@@ -648,7 +654,7 @@
 
 
         // Manually entered 30-day flying time for a crew, stamped with the date it is current as of.
-        const Time30Input = ({ crew, onUpdate }) => {
+        const Time30Input = ({ crew, onUpdate, readOnly = false }) => {
             const t = crew.time30 || { hours: '', asOf: '' };
             const today = todayStr();
             const age = t.asOf ? daysBetween(t.asOf, today) : null;
@@ -657,6 +663,11 @@
                 if (field === 'hours' && value !== '' && !next.asOf) next.asOf = today;
                 onUpdate(crew.id, { time30: next });
             };
+            if (readOnly) {
+                return t.hours !== '' && t.hours != null
+                    ? <div className="text-sm text-slate-700"><span className="font-mono font-bold">{t.hours} h</span>{t.asOf && <span className="text-xs text-slate-500"> as of {t.asOf}{age > 0 ? ` (${age}d old)` : ''}</span>}</div>
+                    : <span className="text-slate-400">—</span>;
+            }
             return (
                 <div className="flex flex-wrap items-center gap-2">
                     <input type="number" min="0" step="0.1" inputMode="decimal" value={t.hours} placeholder="hrs"
@@ -671,7 +682,7 @@
         };
 
         // --- VIEWS ---
-        const DashboardView = ({ crews, buckets, log, period, setPeriod, onUpdateCrew }) => {
+        const DashboardView = ({ crews, buckets, log, period, setPeriod, onUpdateCrew, canEdit = true }) => {
             const today = todayStr();
             const stats = useMemo(() => rankByFairness(computeCrewStats(crews, buckets, log, today, true, period)), [crews, buckets, log, period, today]);
             const sorted = sortBuckets(buckets);
@@ -780,7 +791,7 @@
                                                     </div>
                                                 </td>
                                                 <td className="p-4">
-                                                    <Time30Input crew={s.crew} onUpdate={onUpdateCrew} />
+                                                    <Time30Input crew={s.crew} onUpdate={onUpdateCrew} readOnly={!canEdit} />
                                                 </td>
                                                 {sorted.map(b => <td key={b.id} className="p-4 text-sm text-slate-600">{s.perBucket[b.id] || 0}</td>)}
                                             </tr>
@@ -861,7 +872,7 @@
             );
         };
 
-        const DayPanel = ({ date, crews, buckets, log, notes, garFlags, period, onAdd, onRemove, onSetNote, onSetGar, onClose }) => {
+        const DayPanel = ({ date, crews, buckets, log, notes, garFlags, period, onAdd, onRemove, onSetNote, onSetGar, onClose, canEdit = true }) => {
             const [drafts, setDrafts] = useState({});
             const [garDrafts, setGarDrafts] = useState({});
             const [editingKey, setEditingKey] = useState(null);
@@ -913,11 +924,11 @@
                                                     <span className="font-bold text-slate-800">{nextUp.crew.crewName}</span>
                                                     <span className="text-slate-500"> — {nextGap === undefined ? 'never in this bucket' : `last in bucket ${sinceLabel(nextGap).toLowerCase()}`}</span>
                                                 </div>
-                                                <button type="button" onClick={() => {
+                                                {canEdit && <button type="button" onClick={() => {
                                                     onAdd(date, bucket.id, nextUp.crew.id, (drafts[bucket.id] || '').trim(), !!garDrafts[bucket.id]);
                                                     setDrafts({ ...drafts, [bucket.id]: '' });
                                                     setGarDrafts({ ...garDrafts, [bucket.id]: false });
-                                                }} className="px-2 py-1 rounded-md font-bold text-white bg-blue-600 hover:bg-blue-700 flex-shrink-0">+ Log</button>
+                                                }} className="px-2 py-1 rounded-md font-bold text-white bg-blue-600 hover:bg-blue-700 flex-shrink-0">+ Log</button>}
                                             </div>
                                         )}
                                         {assigned.length === 0 && <p className="text-xs text-slate-400 italic">No crews logged</p>}
@@ -942,20 +953,20 @@
                                                                 onKeyDown={e => { if (e.key === 'Enter') e.target.blur(); if (e.key === 'Escape') { e.target.value = note; e.target.blur(); } }}
                                                                 className="mt-1 w-full text-xs border border-slate-300 rounded p-1 outline-none focus:ring-2 focus:ring-blue-500" />
                                                         ) : note ? (
-                                                            <button onClick={() => setEditingKey(key)} className="mt-1 text-left text-xs text-slate-700 italic hover:text-blue-700" title="Edit note"><i className="fa-regular fa-note-sticky mr-1 text-slate-400"></i>{note}</button>
-                                                        ) : (
+                                                            <button onClick={() => canEdit && setEditingKey(key)} className={`mt-1 text-left text-xs text-slate-700 italic ${canEdit ? 'hover:text-blue-700' : 'cursor-default'}`} title={canEdit ? 'Edit note' : undefined}><i className="fa-regular fa-note-sticky mr-1 text-slate-400"></i>{note}</button>
+                                                        ) : canEdit ? (
                                                             <button onClick={() => setEditingKey(key)} className="mt-1 text-xs text-slate-400 hover:text-blue-600"><i className="fa-solid fa-plus mr-1"></i>Add note</button>
-                                                        )}
+                                                        ) : null}
                                                     </div>
-                                                    <div className="flex items-center gap-1 flex-shrink-0">
+                                                    {!canEdit ? (isGar && <span className="px-2 py-0.5 text-xs font-bold rounded-full border bg-blue-600 text-white border-blue-600 flex-shrink-0">GAR</span>) : <div className="flex items-center gap-1 flex-shrink-0">
                                                         <button onClick={() => onSetGar(date, bucket.id, crewId, !isGar)} aria-pressed={isGar} title={isGar ? 'On GAR — click to clear' : 'Mark as on GAR'}
                                                             className={`px-2 py-0.5 text-xs font-bold rounded-full border ${isGar ? 'bg-blue-600 text-white border-blue-600' : 'bg-white text-slate-500 border-slate-300 hover:bg-slate-50'}`}>GAR</button>
                                                         <button onClick={() => onRemove(date, bucket.id, crewId)} className="text-slate-400 hover:text-red-600 p-1" title="Remove"><i className="fa-solid fa-trash"></i></button>
-                                                    </div>
+                                                    </div>}
                                                 </div>
                                             );
                                         })}
-                                        {available.length > 0 && (
+                                        {canEdit && available.length > 0 && (
                                             <>
                                             <div className="flex gap-2">
                                                 <input type="text" maxLength={200} value={drafts[bucket.id] || ''} placeholder="Quick note (optional)"
@@ -993,7 +1004,7 @@
             );
         };
 
-        const CalendarView = ({ crews, buckets, log, period, setPeriod, selectedDate, setSelectedDate, onAdd, onRemove, notes, onSetNote, garFlags, onSetGar }) => {
+        const CalendarView = ({ crews, buckets, log, period, setPeriod, selectedDate, setSelectedDate, onAdd, onRemove, notes, onSetNote, garFlags, onSetGar, canEdit = true }) => {
             const [cursor, setCursor] = useState(() => {
                 const [y, m] = (selectedDate || todayStr()).split('-').map(Number);
                 return { y, m: m - 1 };
@@ -1078,7 +1089,7 @@
 
                         <div className="xl:col-span-1">
                             {selectedDate ? (
-                                <DayPanel date={selectedDate} crews={crews} buckets={buckets} log={log} notes={notes} garFlags={garFlags} period={period} onAdd={onAdd} onRemove={onRemove} onSetNote={onSetNote} onSetGar={onSetGar} onClose={() => setSelectedDate(null)} />
+                                <DayPanel date={selectedDate} crews={crews} buckets={buckets} log={log} notes={notes} garFlags={garFlags} period={period} onAdd={onAdd} onRemove={onRemove} onSetNote={onSetNote} onSetGar={onSetGar} canEdit={canEdit} onClose={() => setSelectedDate(null)} />
                             ) : (
                                 <div className="bg-white rounded-xl shadow-sm border border-slate-200 p-8 text-center text-slate-400">
                                     <i className="fa-regular fa-calendar-check text-4xl mb-3"></i>
@@ -1092,7 +1103,7 @@
         };
 
 
-        const GarView = ({ crews, gar, notes, garFlags, buckets, onLog, onRemove }) => {
+        const GarView = ({ crews, gar, notes, garFlags, buckets, onLog, onRemove, canEdit = true }) => {
             const today = todayStr();
             const [date, setDate] = useState(today);
             const [crewId, setCrewId] = useState('');
@@ -1181,7 +1192,7 @@
                         </div>
 
                         <div className="space-y-6">
-                            <form onSubmit={submit} className="bg-white rounded-xl shadow-sm border border-slate-200 p-4 space-y-3">
+                            {canEdit && <form onSubmit={submit} className="bg-white rounded-xl shadow-sm border border-slate-200 p-4 space-y-3">
                                 <h3 className="font-bold text-slate-700 uppercase tracking-wider text-sm">Log a GAR</h3>
                                 <div>
                                     <label className="block text-xs font-bold text-slate-600 mb-1">Date</label>
@@ -1200,7 +1211,7 @@
                                     className="w-full text-sm border border-slate-300 rounded-lg p-2 focus:ring-2 focus:ring-blue-500 outline-none" />
                                 {existing && crewMap[existing.crewId] && <p className="text-xs text-amber-700 font-semibold"><i className="fa-solid fa-triangle-exclamation mr-1"></i>{crewMap[existing.crewId].crewName} is already logged for this date; logging again replaces it.</p>}
                                 <button type="submit" disabled={!crewId || !date || date > today} className="w-full py-2 rounded-lg font-bold text-sm text-white bg-blue-600 hover:bg-blue-700 disabled:bg-slate-300">{existing ? 'Replace GAR' : 'Log GAR'}</button>
-                            </form>
+                            </form>}
 
                             <div className="bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden">
                                 <div className="p-4 border-b border-slate-200 bg-slate-50"><h3 className="font-bold text-slate-700 uppercase tracking-wider text-sm">History</h3></div>
@@ -1214,7 +1225,7 @@
                                                 {e.note && <div className="text-xs text-slate-600 italic">{e.note}</div>}
                                                 {e.source === 'log' && <div className="text-xs text-blue-700 font-semibold"><i className="fa-solid fa-calendar-days mr-1"></i>From Flying Log{e.bucketName ? ` (${e.bucketName})` : ''}</div>}
                                             </div>
-                                            {e.source === 'manual' && <button onClick={() => onRemove(e.date)} className="text-slate-400 hover:text-red-600 p-1" title="Remove"><i className="fa-solid fa-trash"></i></button>}
+                                            {e.source === 'manual' && canEdit && <button onClick={() => onRemove(e.date)} className="text-slate-400 hover:text-red-600 p-1" title="Remove"><i className="fa-solid fa-trash"></i></button>}
                                         </div>
                                     ))}
                                 </div>
@@ -1579,15 +1590,15 @@
             );
         };
 
-        const SimpleListView = ({ title, items, columns, renderRow, icon, onAdd, onEdit, onDelete }) => (
+        const SimpleListView = ({ title, items, columns, renderRow, icon, onAdd, onEdit, onDelete, canEdit = true }) => (
             <div className="space-y-6">
                 <div className="flex justify-between items-center">
                     <h2 className="text-2xl font-bold text-slate-800 flex items-center gap-3">
                         <i className={`${icon} text-blue-500 bg-blue-100 p-2 rounded-lg`}></i> {title}
                     </h2>
-                    <button onClick={onAdd} className="bg-slate-900 hover:bg-slate-800 text-white px-4 py-2 rounded-lg text-sm font-bold flex items-center gap-2 transition-all shadow-md">
+                    {canEdit && <button onClick={onAdd} className="bg-slate-900 hover:bg-slate-800 text-white px-4 py-2 rounded-lg text-sm font-bold flex items-center gap-2 transition-all shadow-md">
                         <i className="fa-solid fa-plus"></i> Add New
-                    </button>
+                    </button>}
                 </div>
                 <div className="bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden">
                     <div className="overflow-x-auto">
@@ -1595,19 +1606,19 @@
                             <thead>
                                 <tr className="bg-slate-50 border-b border-slate-200 text-slate-500 text-xs uppercase tracking-wider font-bold">
                                     {columns.map((col, i) => <th key={i} className="p-4">{col}</th>)}
-                                    <th className="p-4 text-right">Actions</th>
+                                    {canEdit && <th className="p-4 text-right">Actions</th>}
                                 </tr>
                             </thead>
                             <tbody className="divide-y divide-slate-100">
                                 {items.map((item, idx) => (
                                     <tr key={item.id || idx} className="hover:bg-slate-50 transition-colors group">
                                         {renderRow(item)}
-                                        <td className="p-4 text-right whitespace-nowrap">
+                                        {canEdit && <td className="p-4 text-right whitespace-nowrap">
                                             <div className="flex justify-end gap-2 opacity-0 group-hover:opacity-100 focus-within:opacity-100 transition-opacity">
                                                 <button onClick={() => onEdit(item)} className="w-8 h-8 flex items-center justify-center text-slate-400 hover:text-blue-600 hover:bg-blue-50 rounded transition-colors"><i className="fa-solid fa-pen"></i></button>
                                                 <button onClick={() => onDelete(item)} className="w-8 h-8 flex items-center justify-center text-slate-400 hover:text-red-600 hover:bg-red-50 rounded transition-colors"><i className="fa-solid fa-trash"></i></button>
                                             </div>
-                                        </td>
+                                        </td>}
                                     </tr>
                                 ))}
                                 {items.length === 0 && <tr><td colSpan={columns.length + 1} className="p-8 text-center text-slate-400">No records found.</td></tr>}
@@ -1619,7 +1630,8 @@
         );
 
         // --- MAIN APP ---
-        function FlightSchedulerApp({ cloud = false, db = null, user = null, onSignOut = null, cloudUnavailable = false }) {
+        function FlightSchedulerApp({ cloud = false, db = null, user = null, onSignOut = null, cloudUnavailable = false, mode = 'editor', onSetMode = null, isStaff = false }) {
+            const canEdit = mode === 'editor'; // viewers see everything but cannot change anything
             const [activeTab, setActiveTab] = useState('dashboard');
             // In cloud mode the shared data arrives from Firestore; otherwise it lives in this browser.
             const [crews, setCrews] = useState(() => cloud ? [] : loadStored('flyfair_crews', INITIAL_CREWS));
@@ -1714,7 +1726,7 @@
                         snap.docs.forEach(d => { remoteRef.current[d.id] = canon(clean(d.data())); });
                         if (snap.empty) {
                             const local = readLocalData();
-                            if (local) { pendingImport.current = local; setSyncState('needsImport'); } else setSyncState('ready');
+                            if (local && canEdit) { pendingImport.current = local; setSyncState('needsImport'); } else setSyncState('ready');
                         } else {
                             applyChanges(snap.docs.map(d => ({ id: d.id, data: d.data() })), []);
                             setSyncState('ready');
@@ -1745,7 +1757,7 @@
                 remoteDirty.current = false;
                 clearTimeout(flushTimer.current);
                 flushTimer.current = setTimeout(() => {
-                    if (remoteDirty.current) return; // a remote change is mid-render; the next render reschedules
+                    if (remoteDirty.current || !canEdit) return; // a remote change is mid-render (the next render reschedules), or this is a read-only session
                     const { crews: c, buckets: b, log: l, notes: n, gar: g, garFlags: gf } = latestRef.current;
                     const desired = buildDocs(c, b, l, n, g, gf);
                     const ops = [];
@@ -1771,7 +1783,7 @@
                     });
                 }, 300);
                 return () => clearTimeout(flushTimer.current);
-            }, [cloud, syncState, crews, buckets, log, notes, gar, garFlags, retryTick]);
+            }, [cloud, syncState, crews, buckets, log, notes, gar, garFlags, retryTick, canEdit]);
 
             const importLocalData = () => {
                 const l = pendingImport.current;
@@ -1978,6 +1990,12 @@
                             {cloud ? (
                                 <>
                                     <div className="text-xs text-slate-400 text-center py-1 truncate">Signed in as <strong className="text-slate-200">{emailToUsername(user && user.email)}</strong></div>
+                                    {onSetMode && (
+                                        <div className="text-center pb-1">
+                                            <span className={`inline-block text-[10px] font-bold uppercase tracking-widest px-2 py-0.5 rounded ${canEdit ? 'bg-emerald-500/20 text-emerald-300' : 'bg-slate-700 text-slate-300'}`}>{canEdit ? 'Editing' : 'View only'}</span>
+                                            {(isStaff || canEdit) && <button onClick={() => onSetMode(canEdit ? 'viewer' : 'editor')} className="block w-full text-xs font-semibold text-slate-400 hover:text-white transition-colors py-1">Switch to {canEdit ? 'viewer' : 'editor'}</button>}
+                                        </div>
+                                    )}
                                     <button onClick={onSignOut} className="w-full text-xs font-semibold text-slate-400 hover:text-white transition-colors py-2"><i className="fa-solid fa-right-from-bracket mr-1"></i> Sign out</button>
                                 </>
                             ) : (
@@ -1990,14 +2008,14 @@
                     <main className="flex-1 overflow-y-auto p-4 md:p-8 relative">
                         <div className="max-w-7xl mx-auto h-full">
                             {cloudUnavailable && <div className="no-print mb-4 text-sm text-amber-800 bg-amber-50 border border-amber-200 rounded-lg p-3"><i className="fa-solid fa-triangle-exclamation mr-2"></i>Cloud sync could not load, so this page is working offline with data saved on this device only. Reload to try again.</div>}
-                            {activeTab === 'dashboard' && <DashboardView crews={crews} buckets={buckets} log={log} period={period} setPeriod={setPeriod} onUpdateCrew={handleUpdateCrew} />}
-                            {activeTab === 'calendar' && <CalendarView crews={crews} buckets={buckets} log={log} period={period} setPeriod={setPeriod} selectedDate={selectedDate} setSelectedDate={setSelectedDate} onAdd={handleAddToBucket} onRemove={handleRemoveFromBucket} notes={notes} onSetNote={handleSetNote} garFlags={garFlags} onSetGar={handleSetGarFlag} />}
+                            {activeTab === 'dashboard' && <DashboardView crews={crews} buckets={buckets} log={log} period={period} setPeriod={setPeriod} onUpdateCrew={handleUpdateCrew} canEdit={canEdit} />}
+                            {activeTab === 'calendar' && <CalendarView crews={crews} buckets={buckets} log={log} period={period} setPeriod={setPeriod} selectedDate={selectedDate} setSelectedDate={setSelectedDate} onAdd={handleAddToBucket} onRemove={handleRemoveFromBucket} notes={notes} onSetNote={handleSetNote} garFlags={garFlags} onSetGar={handleSetGarFlag} canEdit={canEdit} />}
 
                             {activeTab === 'report' && <ReportView crews={crews} buckets={buckets} log={log} notes={notes} gar={gar} garFlags={garFlags} period={period} />}
-                            {activeTab === 'gar' && <GarView crews={crews} gar={gar} notes={notes} garFlags={garFlags} buckets={buckets} onLog={handleLogGar} onRemove={handleRemoveGar} />}
+                            {activeTab === 'gar' && <GarView crews={crews} gar={gar} notes={notes} garFlags={garFlags} buckets={buckets} onLog={handleLogGar} onRemove={handleRemoveGar} canEdit={canEdit} />}
 
                             {activeTab === 'buckets' && (
-                                <SimpleListView
+                                <SimpleListView canEdit={canEdit}
                                     title="Flying Buckets" icon="fa-solid fa-clock" items={sortBuckets(buckets)}
                                     onAdd={() => setModalConfig({ isOpen: true, type: 'BUCKET', data: null })}
                                     onEdit={(b) => setModalConfig({ isOpen: true, type: 'BUCKET', data: b })}
@@ -2019,7 +2037,7 @@
                             )}
 
                             {activeTab === 'crews' && (
-                                <SimpleListView
+                                <SimpleListView canEdit={canEdit}
                                     title="Crews" icon="fa-solid fa-users" items={crews}
                                     onAdd={() => setModalConfig({ isOpen: true, type: 'CREW', data: null })}
                                     onEdit={(c) => setModalConfig({ isOpen: true, type: 'CREW', data: c })}
@@ -2158,6 +2176,34 @@
             );
         };
 
+
+        const AccessChooser = ({ user, access, onPick, onSignOut }) => {
+            const staff = !!(access && access.isStaff);
+            return (
+                <div className="min-h-screen flex items-center justify-center p-4 bg-slate-900">
+                    <div className="bg-white rounded-xl shadow-2xl w-full max-w-md p-6 space-y-4">
+                        <div className="text-center">
+                            <i className="fa-solid fa-shield-halved text-blue-500 text-3xl"></i>
+                            <h1 className="font-black text-2xl tracking-tight text-slate-800 mt-2">How would you like to continue?</h1>
+                            <p className="text-xs text-slate-500 mt-1">Signed in as <strong>{emailToUsername(user.email)}</strong></p>
+                        </div>
+                        <button onClick={() => onPick('viewer')} className="w-full text-left border-2 border-slate-200 hover:border-blue-500 rounded-xl p-4 transition-colors">
+                            <div className="font-bold text-slate-800"><i className="fa-regular fa-eye mr-2 text-blue-500"></i>Viewer</div>
+                            <div className="text-sm text-slate-500 mt-1">See the calendar, statistics, GAR order and reports. No changes.</div>
+                        </button>
+                        <button onClick={() => staff && onPick('editor')} disabled={!staff} aria-disabled={!staff}
+                            className={`w-full text-left border-2 rounded-xl p-4 transition-colors ${staff ? 'border-slate-200 hover:border-blue-500' : 'border-slate-100 opacity-60 cursor-not-allowed'}`}>
+                            <div className="font-bold text-slate-800"><i className={`fa-solid ${staff ? 'fa-pen-to-square' : 'fa-lock'} mr-2 text-blue-500`}></i>Editor</div>
+                            <div className="text-sm text-slate-500 mt-1">Log flying and GAR, and manage crews and buckets.</div>
+                            <div className="text-xs font-bold mt-2 text-slate-500">{access && access.checking ? 'Checking access…' : `${STAFF_GROUP_NAME} only`}</div>
+                        </button>
+                        {access && access.error && <p className="text-xs text-amber-700 font-semibold">Couldn't confirm your editor access ({access.error}). If you should be an editor, ask your administrator.</p>}
+                        <button onClick={onSignOut} className="w-full text-sm font-semibold text-slate-500 hover:text-slate-700 py-1">Sign out</button>
+                    </div>
+                </div>
+            );
+        };
+
         function Root() {
             const fb = window.firebase;
             const available = CLOUD_ENABLED && !!(fb && fb.auth && fb.firestore);
@@ -2171,10 +2217,39 @@
             const [user, setUser] = useState(available ? undefined : null);
             useEffect(() => ctx ? ctx.auth.onAuthStateChanged(u => setUser(u)) : undefined, [ctx]);
 
+            // Viewer/Editor: Editor needs a staff record; the choice is remembered for this browser session only.
+            const [access, setAccess] = useState(null);
+            const [mode, setModeState] = useState(null);
+            const modeKey = user ? `flyfair_mode_${user.uid}` : null;
+            useEffect(() => {
+                if (!ROLES_ENABLED || !user) { setAccess(null); setModeState(null); return; }
+                let alive = true;
+                setAccess({ checking: true });
+                ctx.db.collection('staff').doc(user.email).get()
+                    .then(d => { if (alive) setAccess({ isStaff: d.exists }); })
+                    .catch(err => { if (alive) setAccess({ isStaff: false, error: (err && err.code) || 'error' }); });
+                return () => { alive = false; };
+            }, [user && user.uid]);
+            useEffect(() => {
+                if (!ROLES_ENABLED || !user || !access || access.checking) return;
+                let saved = null;
+                try { saved = sessionStorage.getItem(modeKey); } catch (e) {}
+                setModeState(saved === 'viewer' || (saved === 'editor' && access.isStaff) ? saved : null);
+            }, [access, modeKey]);
+            const setMode = (m) => {
+                if (m === 'editor' && !(access && access.isStaff)) return;
+                try { sessionStorage.setItem(modeKey, m); } catch (e) {}
+                setModeState(m);
+            };
+            const signOut = () => { try { if (modeKey) sessionStorage.removeItem(modeKey); } catch (e) {} ctx.auth.signOut(); };
+
             if (!available) return <FlightSchedulerApp cloudUnavailable={CLOUD_ENABLED} />;
             if (user === undefined) return <div className="min-h-screen flex items-center justify-center bg-slate-900 text-slate-300"><i className="fa-solid fa-circle-notch fa-spin text-3xl"></i></div>;
             if (!user) return <LoginScreen auth={ctx.auth} />;
-            return <FlightSchedulerApp key={user.uid} cloud db={ctx.db} user={user} onSignOut={() => ctx.auth.signOut()} />;
+            if (!ROLES_ENABLED) return <FlightSchedulerApp key={user.uid} cloud db={ctx.db} user={user} onSignOut={signOut} />;
+            if (!access || access.checking) return <div className="min-h-screen flex items-center justify-center bg-slate-900 text-slate-300"><i className="fa-solid fa-circle-notch fa-spin text-3xl"></i></div>;
+            if (!mode) return <AccessChooser user={user} access={access} onPick={setMode} onSignOut={signOut} />;
+            return <FlightSchedulerApp key={`${user.uid}-${mode}`} cloud db={ctx.db} user={user} onSignOut={signOut} mode={mode} onSetMode={setMode} isStaff={!!access.isStaff} />;
         }
 
         const root = ReactDOM.createRoot(document.getElementById('root'));
