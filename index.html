@@ -1692,6 +1692,204 @@
             );
         };
 
+
+        // --- TRENDS ---
+        const TREND_COLORS = ['#2563eb', '#f59e0b', '#10b981', '#8b5cf6', '#ef4444', '#06b6d4', '#ec4899', '#84cc16', '#f97316', '#64748b'];
+        const MONTH_ABBR = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+
+        // The last 12 weeks (Mon-Sun) or 12 months, oldest first, ending with the current one.
+        const buildTrendPeriods = (gran, today) => {
+            const [y, m, d] = today.split('-').map(Number);
+            const periods = [];
+            if (gran === 'weeks') {
+                const dow = (new Date(y, m - 1, d).getDay() + 6) % 7; // Monday = 0
+                const thisMonday = addDays(today, -dow);
+                for (let i = 11; i >= 0; i--) {
+                    const start = addDays(thisMonday, -7 * i);
+                    const [, sm, sd] = start.split('-').map(Number);
+                    periods.push({ start, end: addDays(start, 6), label: `${sm}/${sd}`, title: `Week of ${sd} ${MONTH_ABBR[sm - 1]}` });
+                }
+            } else {
+                for (let i = 11; i >= 0; i--) {
+                    const first = new Date(y, m - 1 - i, 1);
+                    const last = new Date(y, m - i, 0);
+                    periods.push({ start: toDateStr(first), end: toDateStr(last), label: MONTH_ABBR[first.getMonth()], title: `${MONTH_ABBR[first.getMonth()]} ${first.getFullYear()}` });
+                }
+            }
+            return periods;
+        };
+
+        const chartText = { fontSize: 11, fontFamily: 'Inter, sans-serif' };
+
+        const StackedBars = ({ periods, series, compact }) => {
+            const W = compact ? 420 : 720, H = compact ? 220 : 250, L = 30, R = 6, T = 16, B = 26;
+            const totals = periods.map((_, i) => series.reduce((sum, x) => sum + x.values[i], 0));
+            const max = Math.max(1, ...totals);
+            const niceMax = max <= 5 ? max : Math.ceil(max / 5) * 5;
+            const ticks = niceMax <= 5 ? Array.from({ length: niceMax + 1 }, (_, i) => i) : [0, 1, 2, 3, 4, 5].map(i => (i * niceMax) / 5);
+            const bw = (W - L - R) / periods.length;
+            const y = (v) => T + (H - T - B) * (1 - v / niceMax);
+            return (
+                <svg viewBox={`0 0 ${W} ${H}`} className="w-full h-auto" role="img" aria-label="Stacked bar chart">
+                    {ticks.map(t => (
+                        <g key={t}>
+                            <line x1={L} x2={W - R} y1={y(t)} y2={y(t)} stroke="rgba(148,163,184,.3)" strokeWidth="1" />
+                            <text x={L - 6} y={y(t) + 4} textAnchor="end" className="fill-current text-slate-500" style={chartText}>{t}</text>
+                        </g>
+                    ))}
+                    {periods.map((per, i) => {
+                        let acc = 0;
+                        return (
+                            <g key={per.start}>
+                                {series.map(sr => {
+                                    const v = sr.values[i];
+                                    if (!v) return null;
+                                    const rect = <rect key={sr.crew.id} x={L + i * bw + bw * 0.15} width={bw * 0.7} y={y(acc + v)} height={y(acc) - y(acc + v)} fill={sr.color} rx="1.5"><title>{`${sr.crew.crewName}: ${v} (${per.title})`}</title></rect>;
+                                    acc += v;
+                                    return rect;
+                                })}
+                                {totals[i] > 0 && <text x={L + i * bw + bw / 2} y={y(totals[i]) - 4} textAnchor="middle" className="fill-current text-slate-600" style={{ ...chartText, fontWeight: 700 }}>{totals[i]}</text>}
+                                {(!compact || i % 2 === 0 || i === periods.length - 1) && <text x={L + i * bw + bw / 2} y={H - 8} textAnchor="middle" className="fill-current text-slate-500" style={chartText}>{per.label}</text>}
+                            </g>
+                        );
+                    })}
+                </svg>
+            );
+        };
+
+        const SpreadLine = ({ periods, values, compact }) => {
+            const W = compact ? 420 : 720, H = compact ? 170 : 190, L = 30, R = 10, T = 16, B = 26;
+            const max = Math.max(1, ...values);
+            const bw = (W - L - R) / periods.length;
+            const x = (i) => L + i * bw + bw / 2;
+            const y = (v) => T + (H - T - B) * (1 - v / max);
+            const pts = values.map((v, i) => `${x(i)},${y(v)}`).join(' ');
+            return (
+                <svg viewBox={`0 0 ${W} ${H}`} className="w-full h-auto text-blue-600" role="img" aria-label="Line chart of crew spread">
+                    {[0, max].map(t => (
+                        <g key={t}>
+                            <line x1={L} x2={W - R} y1={y(t)} y2={y(t)} stroke="rgba(148,163,184,.3)" strokeWidth="1" />
+                            <text x={L - 6} y={y(t) + 4} textAnchor="end" className="fill-current text-slate-500" style={chartText}>{t}</text>
+                        </g>
+                    ))}
+                    <polyline points={pts} fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinejoin="round" strokeLinecap="round" />
+                    {values.map((v, i) => (
+                        <g key={i}>
+                            <circle cx={x(i)} cy={y(v)} r="3.5" fill="currentColor"><title>{`${periods[i].title}: spread ${v}`}</title></circle>
+                            {(!compact || i % 2 === 0 || i === periods.length - 1) && <text x={x(i)} y={H - 8} textAnchor="middle" className="fill-current text-slate-500" style={chartText}>{periods[i].label}</text>}
+                        </g>
+                    ))}
+                </svg>
+            );
+        };
+
+        const TrendsView = ({ crews, buckets, log, gar, notes, garFlags, compact }) => {
+            const today = todayStr();
+            const [gran, setGran] = useState('weeks');
+            const periods = useMemo(() => buildTrendPeriods(gran, today), [gran, today]);
+            const data = useMemo(() => {
+                const idx = Object.fromEntries(crews.map((c, i) => [c.id, i]));
+                const sorties = crews.map(() => periods.map(() => 0));
+                const garCounts = crews.map(() => periods.map(() => 0));
+                const place = (date) => periods.findIndex(per => date >= per.start && date <= per.end);
+                Object.entries(log).forEach(([date, byBucket]) => {
+                    if (date > today) return;
+                    const pi = place(date);
+                    if (pi < 0) return;
+                    Object.values(byBucket).forEach(ids => ids.forEach(id => { if (idx[id] !== undefined) sorties[idx[id]][pi] += 1; }));
+                });
+                collectGarEntries(crews, gar, notes, buckets, today, garFlags).forEach(e => {
+                    const pi = place(e.date);
+                    if (pi >= 0 && idx[e.crewId] !== undefined) garCounts[idx[e.crewId]][pi] += 1;
+                });
+                const mk = (rows) => crews.map((c, i) => ({ crew: c, color: TREND_COLORS[i % TREND_COLORS.length], values: rows[i] }));
+                const sortieSeries = mk(sorties), garSeries = mk(garCounts);
+                const spread = periods.map((_, pi) => crews.length ? Math.max(...sorties.map(r => r[pi])) - Math.min(...sorties.map(r => r[pi])) : 0);
+                const totals = sortieSeries.map(sr => ({ crew: sr.crew, total: sr.values.reduce((a, b) => a + b, 0) })).sort((a, b) => b.total - a.total);
+                // balance trend: mean spread over the most recent third of the range vs the earliest third
+                const active = periods.map((_, pi) => sorties.some(r => r[pi] > 0));
+                const third = Math.floor(periods.length / 3);
+                const mean = (arr) => arr.length ? arr.reduce((a, b) => a + b, 0) / arr.length : 0;
+                const early = spread.slice(0, third).filter((_, i) => active[i]);
+                const recent = spread.slice(-third).filter((_, i) => active[periods.length - third + i]);
+                let balance = null;
+                if (early.length && recent.length) {
+                    const delta = mean(recent) - mean(early);
+                    balance = delta <= -0.3 ? 'improving' : delta >= 0.3 ? 'widening' : 'steady';
+                }
+                return { sortieSeries, garSeries, spread, totals, balance, anyFlying: totals.some(t => t.total > 0) };
+            }, [crews, buckets, log, gar, notes, garFlags, periods, today]);
+
+            const Legend = () => (
+                <div className="flex flex-wrap gap-x-4 gap-y-1 mt-2">
+                    {crews.map((c, i) => <span key={c.id} className="flex items-center gap-1.5 text-xs text-slate-600"><span className="inline-block w-2.5 h-2.5 rounded-sm" style={{ backgroundColor: TREND_COLORS[i % TREND_COLORS.length] }}></span>{c.crewName}</span>)}
+                </div>
+            );
+            const top = data.totals[0], bottom = data.totals[data.totals.length - 1];
+            const balanceInfo = { improving: ['Improving', 'text-emerald-600'], steady: ['Steady', 'text-slate-800'], widening: ['Widening', 'text-amber-600'] }[data.balance] || ['Not enough data', 'text-slate-400'];
+
+            return (
+                <div className="space-y-6">
+                    <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
+                        <div>
+                            <h2 className="text-2xl font-bold text-slate-800">Trends</h2>
+                            <p className="text-sm text-slate-500 mt-1">How flying and GARs have been spread over time. Planned days don't count until they arrive.</p>
+                        </div>
+                        <div className="inline-flex bg-white border border-slate-200 rounded-lg shadow-sm p-1 gap-1">
+                            {[['weeks', 'Last 12 weeks'], ['months', 'Last 12 months']].map(([k, label]) => (
+                                <button key={k} onClick={() => setGran(k)} aria-pressed={gran === k} className={`px-3 py-1 rounded-md text-sm font-bold transition-colors ${gran === k ? 'bg-slate-900 text-white' : 'text-slate-600 hover:bg-slate-100'}`}>{label}</button>
+                            ))}
+                        </div>
+                    </div>
+
+                    {!crews.length || !data.anyFlying ? (
+                        <div className="bg-white rounded-xl shadow-sm border border-slate-200 p-10 text-center text-slate-400">
+                            <i className="fa-solid fa-chart-line text-4xl mb-3"></i>
+                            <p className="text-sm">No flying logged in this range yet. Log some flights and the trends will appear here.</p>
+                        </div>
+                    ) : (
+                        <>
+                            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                                <div className="bg-white p-3 sm:p-4 rounded-xl shadow-sm border border-slate-100">
+                                    <p className="text-sm font-medium text-slate-500">Most sorties</p>
+                                    <h3 className="text-lg font-bold text-slate-800 mt-1 leading-tight">{top.crew.crewName}</h3>
+                                    <p className="text-xs text-slate-500 mt-1">{top.total} in this range</p>
+                                </div>
+                                <div className="bg-white p-3 sm:p-4 rounded-xl shadow-sm border border-slate-100">
+                                    <p className="text-sm font-medium text-slate-500">Fewest sorties</p>
+                                    <h3 className="text-lg font-bold text-slate-800 mt-1 leading-tight">{bottom.crew.crewName}</h3>
+                                    <p className="text-xs text-slate-500 mt-1">{bottom.total} in this range</p>
+                                </div>
+                                <div className="bg-white p-3 sm:p-4 rounded-xl shadow-sm border border-slate-100">
+                                    <p className="text-sm font-medium text-slate-500">Balance</p>
+                                    <h3 className={`text-lg font-bold mt-1 leading-tight ${balanceInfo[1]}`}>{balanceInfo[0]}</h3>
+                                    <p className="text-xs text-slate-500 mt-1">Recent spread vs. the start of the range</p>
+                                </div>
+                            </div>
+
+                            <div className="bg-white rounded-xl shadow-sm border border-slate-200 p-4">
+                                <h3 className="font-bold text-slate-700 uppercase tracking-wider text-sm mb-2">Sorties per {gran === 'weeks' ? 'week' : 'month'}, by crew</h3>
+                                <StackedBars periods={periods} series={data.sortieSeries} compact={compact} />
+                                <Legend />
+                            </div>
+
+                            <div className="bg-white rounded-xl shadow-sm border border-slate-200 p-4">
+                                <h3 className="font-bold text-slate-700 uppercase tracking-wider text-sm">Spread between crews</h3>
+                                <p className="text-xs text-slate-500 mb-2">Most sorties minus fewest in each {gran === 'weeks' ? 'week' : 'month'}. Lower means flying was more even.</p>
+                                <SpreadLine periods={periods} values={data.spread} compact={compact} />
+                            </div>
+
+                            <div className="bg-white rounded-xl shadow-sm border border-slate-200 p-4">
+                                <h3 className="font-bold text-slate-700 uppercase tracking-wider text-sm mb-2">GARs filled per {gran === 'weeks' ? 'week' : 'month'}, by crew</h3>
+                                <StackedBars periods={periods} series={data.garSeries} compact={compact} />
+                                <Legend />
+                            </div>
+                        </>
+                    )}
+                </div>
+            );
+        };
+
         const SimpleListView = ({ title, items, columns, renderRow, icon, onAdd, onEdit, onDelete, canEdit = true }) => (
             <div className="space-y-6">
                 <div className="flex justify-between items-center">
@@ -1763,6 +1961,7 @@
 
             const applyChanges = (upserts, removals) => {
                 remoteDirty.current = true;
+                if (!skipUntil.current || skipUntil.current < Date.now()) skipUntil.current = Date.now() + 800;
                 const byOrder = (a, b) => (a.order ?? 1e9) - (b.order ?? 1e9) || (a.crewName || '').localeCompare(b.crewName || '');
                 const crewUp = [], bucketUp = [], dayUp = [], garUp = [];
                 const crewDel = new Set(), bucketDel = new Set(), dayDel = new Set(), garDel = new Set();
@@ -1888,6 +2087,118 @@
                 }, 300);
                 return () => clearTimeout(flushTimer.current);
             }, [cloud, syncState, crews, buckets, log, notes, gar, garFlags, retryTick, canEdit]);
+
+
+            // --- undo / redo of this session's own changes ---
+            // Changes are tracked as before/after versions of the stored documents they touched, so undoing
+            // restores only those documents and leaves other people's edits alone.
+            const [history, setHistory] = useState({ undo: [], redo: [] });
+            const [toast, setToast] = useState(null);
+            const historyRef = useRef(history);
+            historyRef.current = history;
+            const prevDocsRef = useRef(null);
+            const skipUntil = useRef(0);        // changes applied from the cloud or by undo/redo are not new history
+            const lastEntryAt = useRef(0);
+            const toastTimer = useRef(null);
+
+            const describeChange = (before, after) => {
+                const crewName = (id) => (latestRef.current.crews.find(c => c.id === id) || {}).crewName || 'a crew';
+                const bucketName = (id) => (latestRef.current.buckets.find(b => b.id === id) || {}).name || 'a bucket';
+                const ids = Object.keys(after);
+                const kind = (pre) => ids.filter(id => id.startsWith(pre));
+                const extra = (n) => ids.length > n ? ` (+${ids.length - n} related)` : '';
+                for (const id of kind('crew-')) {
+                    if (!before[id]) return `Added crew ${after[id].crewName}`;
+                    if (!after[id]) return `Deleted crew ${before[id].crewName}${extra(1)}`;
+                }
+                for (const id of kind('crew-')) return `Edited crew ${after[id].crewName}`;
+                for (const id of kind('bucket-')) {
+                    if (!before[id]) return `Added bucket ${after[id].name}`;
+                    if (!after[id]) return `Deleted bucket ${before[id].name}${extra(1)}`;
+                    return `Edited bucket ${after[id].name}`;
+                }
+                for (const id of kind('gar-')) {
+                    const a = after[id], b = before[id];
+                    return a ? `Logged GAR: ${crewName(a.crewId)} (${a.date})` : `Removed GAR (${b.date})`;
+                }
+                for (const id of kind('day-')) {
+                    const a = after[id] || { byBucket: {}, notes: {}, date: before[id].date }, b = before[id] || { byBucket: {}, notes: {} };
+                    const flat = (doc) => Object.entries(doc.byBucket || {}).flatMap(([bk, crewIds]) => crewIds.map(c => `${bk}|${c}`));
+                    const bs = new Set(flat(b)), as = new Set(flat(a));
+                    const added = [...as].filter(k => !bs.has(k)), removed = [...bs].filter(k => !as.has(k));
+                    const date = a.date || b.date;
+                    const nice = (k) => { const [bk, c] = k.split('|'); return `${crewName(c)} in ${bucketName(bk)}`; };
+                    if (added.length) return `Logged ${nice(added[0])}${added.length > 1 ? ` +${added.length - 1} more` : ''} (${date})`;
+                    if (removed.length) return `Removed ${nice(removed[0])}${removed.length > 1 ? ` +${removed.length - 1} more` : ''} (${date})`;
+                    return `Updated notes / GAR marks (${date})`;
+                }
+                return 'Change';
+            };
+
+            useEffect(() => {
+                const cur = buildDocs(crews, buckets, log, notes, gar, garFlags);
+                const prev = prevDocsRef.current;
+                prevDocsRef.current = cur;
+                if (prev === null) return;
+                if (Date.now() < skipUntil.current) { skipUntil.current = 0; return; }
+                if (!canEdit || (cloud && syncState !== 'ready')) return;
+                const before = {}, after = {};
+                new Set([...Object.keys(prev), ...Object.keys(cur)]).forEach(id => {
+                    if ((prev[id] ? canon(prev[id]) : '') !== (cur[id] ? canon(cur[id]) : '')) { before[id] = prev[id] || null; after[id] = cur[id] || null; }
+                });
+                if (!Object.keys(after).length) return;
+                const now = Date.now();
+                const label = describeChange(before, after);
+                setHistory(h => {
+                    const last = h.undo[h.undo.length - 1];
+                    const sameDocs = last && Object.keys(last.after).length === Object.keys(after).length && Object.keys(after).every(id => id in last.after);
+                    if (sameDocs && now - lastEntryAt.current < 1500) { // typing in one field: one undo step, not one per keystroke
+                        return { undo: [...h.undo.slice(0, -1), { ...last, after: { ...last.after, ...after }, label }], redo: [] };
+                    }
+                    return { undo: [...h.undo, { before, after, label }].slice(-50), redo: [] };
+                });
+                lastEntryAt.current = now;
+                clearTimeout(toastTimer.current);
+                setToast({ text: label });
+                toastTimer.current = setTimeout(() => setToast(null), 7000);
+            }, [crews, buckets, log, notes, gar, garFlags]);
+
+            const restoreDocs = (docMap) => {
+                const ups = [], rem = [];
+                Object.entries(docMap).forEach(([id, d]) => { if (d) ups.push({ id, data: d }); else rem.push(id); });
+                skipUntil.current = Date.now() + 800;
+                applyChanges(ups, rem);
+            };
+            const showToast = (text) => { clearTimeout(toastTimer.current); setToast({ text }); toastTimer.current = setTimeout(() => setToast(null), 5000); };
+            const undo = () => {
+                const h = historyRef.current;
+                if (!canEdit || !h.undo.length) return;
+                const e = h.undo[h.undo.length - 1];
+                restoreDocs(e.before);
+                setHistory({ undo: h.undo.slice(0, -1), redo: [...h.redo, e] });
+                showToast(`Undid: ${e.label}`);
+            };
+            const redo = () => {
+                const h = historyRef.current;
+                if (!canEdit || !h.redo.length) return;
+                const e = h.redo[h.redo.length - 1];
+                restoreDocs(e.after);
+                setHistory({ undo: [...h.undo, e], redo: h.redo.slice(0, -1) });
+                showToast(`Redid: ${e.label}`);
+            };
+            const undoRef = useRef(); undoRef.current = { undo, redo };
+            useEffect(() => {
+                const onKey = (e) => {
+                    if (!(e.ctrlKey || e.metaKey) || e.altKey) return;
+                    const el = e.target;
+                    if (el && (['INPUT', 'TEXTAREA', 'SELECT'].includes(el.tagName) || el.isContentEditable)) return; // let fields keep their own undo
+                    const k = e.key.toLowerCase();
+                    if (k === 'z' && !e.shiftKey) { e.preventDefault(); undoRef.current.undo(); }
+                    else if ((k === 'z' && e.shiftKey) || k === 'y') { e.preventDefault(); undoRef.current.redo(); }
+                };
+                window.addEventListener('keydown', onKey);
+                return () => window.removeEventListener('keydown', onKey);
+            }, []);
 
             const importLocalData = () => {
                 const l = pendingImport.current;
@@ -2056,6 +2367,7 @@
                 { id: 'dashboard', label: 'Fairness', icon: 'fa-scale-balanced' },
                 { id: 'calendar', label: 'Flying Log', icon: 'fa-calendar-days' },
                 { id: 'gar', label: 'Ground Alert (GAR)', icon: 'fa-bell' },
+                { id: 'trends', label: 'Trends', icon: 'fa-chart-line' },
                 { id: 'buckets', label: 'Flying Buckets', icon: 'fa-clock' },
                 { id: 'crews', label: 'Crews', icon: 'fa-users' },
                 { id: 'report', label: 'Report', icon: 'fa-file-lines' }
@@ -2103,6 +2415,14 @@
                         </div>
                         <div className="p-4 border-t border-slate-800 bg-slate-950/30">
                             {saveStatus && <div className="text-xs text-emerald-400 font-bold mb-3 flex items-center gap-2 justify-center"><i className="fa-solid fa-floppy-disk"></i> {saveStatus}</div>}
+                            {canEdit && (
+                                <div className="flex gap-2 pb-2">
+                                    <button onClick={undo} disabled={!history.undo.length} title={history.undo.length ? `Undo: ${history.undo[history.undo.length - 1].label}` : 'Nothing to undo'}
+                                        className="flex-1 text-xs font-bold py-1.5 rounded-lg border border-slate-700 text-slate-300 hover:bg-slate-800 disabled:opacity-40 disabled:hover:bg-transparent"><i className="fa-solid fa-rotate-left mr-1"></i>Undo</button>
+                                    <button onClick={redo} disabled={!history.redo.length} title={history.redo.length ? `Redo: ${history.redo[history.redo.length - 1].label}` : 'Nothing to redo'}
+                                        className="flex-1 text-xs font-bold py-1.5 rounded-lg border border-slate-700 text-slate-300 hover:bg-slate-800 disabled:opacity-40 disabled:hover:bg-transparent"><i className="fa-solid fa-rotate-right mr-1"></i>Redo</button>
+                                </div>
+                            )}
                             <div className="flex justify-center pb-2"><LayoutToggle layout={layout} setLayout={setLayout} dark /></div>
                             <button onClick={toggleTheme} className="w-full text-xs font-semibold text-slate-400 hover:text-white transition-colors py-2" aria-pressed={isDark}>
                                 <i className={`fa-solid ${isDark ? 'fa-sun' : 'fa-moon'} mr-1`}></i> {isDark ? 'Light Theme' : 'Dark Theme'}
@@ -2152,6 +2472,14 @@
                         </div>
                         <div className="p-4 border-t border-slate-800 bg-slate-950/30">
                             {saveStatus && <div className="text-xs text-emerald-400 font-bold mb-3 flex items-center gap-2 justify-center"><i className="fa-solid fa-floppy-disk"></i> {saveStatus}</div>}
+                            {canEdit && (
+                                <div className="flex gap-2 pb-2">
+                                    <button onClick={undo} disabled={!history.undo.length} title={history.undo.length ? `Undo: ${history.undo[history.undo.length - 1].label}` : 'Nothing to undo'}
+                                        className="flex-1 text-xs font-bold py-1.5 rounded-lg border border-slate-700 text-slate-300 hover:bg-slate-800 disabled:opacity-40 disabled:hover:bg-transparent"><i className="fa-solid fa-rotate-left mr-1"></i>Undo</button>
+                                    <button onClick={redo} disabled={!history.redo.length} title={history.redo.length ? `Redo: ${history.redo[history.redo.length - 1].label}` : 'Nothing to redo'}
+                                        className="flex-1 text-xs font-bold py-1.5 rounded-lg border border-slate-700 text-slate-300 hover:bg-slate-800 disabled:opacity-40 disabled:hover:bg-transparent"><i className="fa-solid fa-rotate-right mr-1"></i>Redo</button>
+                                </div>
+                            )}
                             <div className="flex justify-center pb-2"><LayoutToggle layout={layout} setLayout={setLayout} dark /></div>
                             <button onClick={toggleTheme} className="w-full text-xs font-semibold text-slate-400 hover:text-white transition-colors py-2" aria-pressed={isDark}>
                                 <i className={`fa-solid ${isDark ? 'fa-sun' : 'fa-moon'} mr-1`}></i> {isDark ? 'Light Theme' : 'Dark Theme'}
@@ -2181,6 +2509,7 @@
                             {activeTab === 'dashboard' && <DashboardView crews={crews} buckets={buckets} log={log} period={period} setPeriod={setPeriod} onUpdateCrew={handleUpdateCrew} canEdit={canEdit} compact={isMobile} />}
                             {activeTab === 'calendar' && <CalendarView crews={crews} buckets={buckets} log={log} period={period} setPeriod={setPeriod} selectedDate={selectedDate} setSelectedDate={setSelectedDate} onAdd={handleAddToBucket} onRemove={handleRemoveFromBucket} notes={notes} onSetNote={handleSetNote} garFlags={garFlags} onSetGar={handleSetGarFlag} canEdit={canEdit} compact={isMobile} />}
 
+                            {activeTab === 'trends' && <TrendsView crews={crews} buckets={buckets} log={log} gar={gar} notes={notes} garFlags={garFlags} compact={isMobile} />}
                             {activeTab === 'report' && <ReportView crews={crews} buckets={buckets} log={log} notes={notes} gar={gar} garFlags={garFlags} period={period} />}
                             {activeTab === 'gar' && <GarView crews={crews} gar={gar} notes={notes} garFlags={garFlags} buckets={buckets} onLog={handleLogGar} onRemove={handleRemoveGar} canEdit={canEdit} />}
 
@@ -2262,6 +2591,14 @@
                                     </>
                                 )}
                             </div>
+                        </div>
+                    )}
+
+                    {toast && canEdit && (
+                        <div className="no-print fixed left-1/2 -translate-x-1/2 z-[65] bg-slate-900 text-white text-sm rounded-xl shadow-2xl px-4 py-2.5 flex items-center gap-3 max-w-[92vw]" style={{ bottom: 'calc(env(safe-area-inset-bottom) + 16px)' }} role="status">
+                            <span className="truncate">{toast.text}</span>
+                            {history.undo.length > 0 && !toast.text.startsWith('Undid') && !toast.text.startsWith('Redid') && <button onClick={undo} className="font-bold text-yellow-300 hover:text-yellow-200 flex-shrink-0">Undo</button>}
+                            <button onClick={() => setToast(null)} aria-label="Dismiss" className="text-slate-400 hover:text-white flex-shrink-0"><i className="fa-solid fa-xmark"></i></button>
                         </div>
                     )}
 
