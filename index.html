@@ -2729,11 +2729,11 @@
                             <h1 className="font-black text-2xl tracking-tight text-slate-800 mt-2">How would you like to continue?</h1>
                             <p className="text-xs text-slate-500 mt-1">Signed in as <strong>{emailToUsername(user.email)}</strong></p>
                         </div>
-                        <button onClick={onViewer} className="w-full text-left border-2 border-slate-200 hover:border-blue-500 rounded-xl p-4 transition-colors">
+                        <button onClick={onViewer} className="w-full text-center border-2 border-slate-200 hover:border-blue-500 rounded-xl p-4 transition-colors">
                             <div className="font-bold text-slate-800"><i className="fa-regular fa-eye mr-2 text-blue-500"></i>Viewer</div>
                         </button>
                         <div className={`border-2 rounded-xl p-4 transition-colors ${asking ? 'border-blue-500' : 'border-slate-200 hover:border-blue-500'}`}>
-                            <button type="button" onClick={() => unlocked ? onUnlock(null) : setAsking(true)} className="w-full text-left">
+                            <button type="button" onClick={() => unlocked ? onUnlock(null) : setAsking(true)} className="w-full text-center">
                                 <div className="font-bold text-slate-800"><i className={`fa-solid ${unlocked ? 'fa-pen-to-square' : 'fa-lock'} mr-2 text-blue-500`}></i>Editor</div>
                                 <div className="text-xs font-bold mt-1 text-slate-500">Caddy Staff Only</div>
                             </button>
