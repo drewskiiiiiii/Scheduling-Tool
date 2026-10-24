@@ -128,6 +128,9 @@
         .rp-sheet .rp-tag { display: inline-block; margin-left: 6px; padding: 1px 7px; border-radius: 4px; background: #1d4ed8; color: #fff; font-size: 10px; font-weight: 800; letter-spacing: .05em; vertical-align: middle; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
         .rp-sheet .rp-tag.rp-tag-gar { background: #d97706; }
         .rp-sheet .rp-mini { display: inline-block; height: 12px; border-radius: 3px; vertical-align: middle; margin-right: 6px; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+        .rp-sheet .rp-buckets { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 6px; }
+        .rp-sheet .rp-bkt { flex: 1 1 190px; border: 1px solid #cbd5e1; border-radius: 8px; padding: 6px 10px; break-inside: avoid; }
+        .rp-sheet .rp-dot { display: inline-block; width: 9px; height: 9px; border-radius: 9px; margin-right: 6px; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
         .rp-sheet .rp-chart { margin-top: 6px; }
         .rp-sheet .rp-chart-row { display: flex; align-items: center; gap: 10px; padding: 3px 0; break-inside: avoid; }
         .rp-sheet .rp-chart-label { width: 190px; flex: none; font-weight: 600; }
@@ -709,6 +712,34 @@
                         </div>
                     </div>
 
+                    {sorted.length > 0 && (
+                        <div>
+                            <h3 className="text-lg font-bold text-slate-800 mb-2">Next up by bucket</h3>
+                            <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-4">
+                                {sorted.map(b => {
+                                    const { rows } = bucketBreakdown(b, stats, crews);
+                                    const next = rows[0];
+                                    const then = rows[1];
+                                    const d = next ? next.daysSinceByBucket[b.id] : undefined;
+                                    return (
+                                        <div key={b.id} className="bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden">
+                                            <div className="px-4 py-2 flex items-center gap-2 text-sm font-bold text-slate-800" style={{ backgroundColor: b.color + '1a' }}>
+                                                <BucketDot color={b.color} />{b.name}
+                                                <span className="font-mono text-xs text-slate-500 font-semibold ml-auto">{formatMilTime(b.start)}-{formatMilTime(b.end)}</span>
+                                            </div>
+                                            <div className="p-4">
+                                                <p className="text-[10px] font-bold uppercase tracking-widest text-slate-400">Next up</p>
+                                                <h4 className="text-lg font-black text-blue-700 leading-tight">{next ? next.crew.crewName : 'No crews'}</h4>
+                                                {next && <p className="text-xs text-slate-500 mt-0.5">{d === undefined ? 'Never flown this bucket' : `Last in this bucket ${sinceLabel(d).toLowerCase()}`}</p>}
+                                                {then && <p className="text-xs text-slate-400 mt-2">Then: {then.crew.crewName}</p>}
+                                            </div>
+                                        </div>
+                                    );
+                                })}
+                            </div>
+                        </div>
+                    )}
+
                     <div className="bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden">
                         <div className="p-4 border-b border-slate-200 bg-slate-50 flex justify-between items-center">
                             <h3 className="font-bold text-slate-700 uppercase tracking-wider text-sm">Crews by time since last flown</h3>
@@ -858,6 +889,8 @@
                             const assigned = dayLog[bucket.id] || [];
                             const available = orderedCrews.filter(s => !assigned.includes(s.crew.id));
                             const designated = designatedIds(bucket, crews);
+                            const nextUp = bucketBreakdown(bucket, orderedCrews, crews).rows.find(r => !assigned.includes(r.crew.id));
+                            const nextGap = nextUp ? nextUp.daysSinceByBucket[bucket.id] : undefined;
                             const mine = available.filter(s => designated.includes(s.crew.id));
                             const others = available.filter(s => !designated.includes(s.crew.id));
                             const optionFor = (s) => (
@@ -873,6 +906,20 @@
                                         <span className="font-mono text-xs text-slate-500 font-semibold ml-auto">{formatMilTime(bucket.start)}-{formatMilTime(bucket.end)}</span>
                                     </div>
                                     <div className="p-3 space-y-2">
+                                        {nextUp && (
+                                            <div className="flex items-center justify-between gap-2 text-xs bg-blue-50 border border-blue-200 rounded-lg px-3 py-2">
+                                                <div className="min-w-0">
+                                                    <span className="font-bold text-blue-700 uppercase tracking-wide mr-1">Next up</span>
+                                                    <span className="font-bold text-slate-800">{nextUp.crew.crewName}</span>
+                                                    <span className="text-slate-500"> — {nextGap === undefined ? 'never in this bucket' : `last in bucket ${sinceLabel(nextGap).toLowerCase()}`}</span>
+                                                </div>
+                                                <button type="button" onClick={() => {
+                                                    onAdd(date, bucket.id, nextUp.crew.id, (drafts[bucket.id] || '').trim(), !!garDrafts[bucket.id]);
+                                                    setDrafts({ ...drafts, [bucket.id]: '' });
+                                                    setGarDrafts({ ...garDrafts, [bucket.id]: false });
+                                                }} className="px-2 py-1 rounded-md font-bold text-white bg-blue-600 hover:bg-blue-700 flex-shrink-0">+ Log</button>
+                                            </div>
+                                        )}
                                         {assigned.length === 0 && <p className="text-xs text-slate-400 italic">No crews logged</p>}
                                         {assigned.map(crewId => {
                                             const s = stats[crewId];
@@ -1247,6 +1294,13 @@
                     L.push('');
                     if (data.flyNext) L.push(`FLY NEXT: ${data.flyNext.crew.crewName} (${data.flyNext.last ? `last flew ${sinceLabel(data.flyNext.daysSince).toLowerCase()}` : 'has not flown'})`);
                     if (data.garNext) L.push(`GAR NEXT: ${data.garNext.crew.crewName} (${data.garNext.last ? `last GAR ${sinceLabel(data.garNext.daysSince).toLowerCase()}` : 'no GAR yet'})`);
+                    if (data.perBucket.length) {
+                        L.push('', 'NEXT UP BY BUCKET');
+                        data.perBucket.forEach(({ bucket, rows }) => {
+                            const n = rows[0];
+                            L.push(`${bucket.name} (${formatMilTime(bucket.start)}-${formatMilTime(bucket.end)}Z): ${n ? `${n.crew.crewName} — ${n.daysSinceByBucket[bucket.id] === undefined ? 'never in this bucket' : `last in bucket ${sinceLabel(n.daysSinceByBucket[bucket.id]).toLowerCase()}`}` : '—'}`);
+                        });
+                    }
                     L.push('', 'CREW · LAST FLOWN · SORTIES · GARs');
                     data.glanceRows.forEach((r, i) => L.push(`${i + 1}. ${r.crew.crewName} · ${r.last ? sinceLabel(r.daysSince).toLowerCase() : 'never'} · ${r.sorties} · ${r.garWin}`));
                     return L.join('\n');
@@ -1382,6 +1436,24 @@
                                         <div className="rp-muted">{data.garNext ? (data.garNext.last ? `last GAR ${sinceLabel(data.garNext.daysSince).toLowerCase()}` : 'no GAR yet') : ''}</div>
                                     </div>
                                 </div>
+                                {data.perBucket.length > 0 && (
+                                    <div style={{ marginTop: 14 }}>
+                                        <div className="rp-kicker" style={{ fontSize: 11, fontWeight: 800, letterSpacing: '.08em', textTransform: 'uppercase', color: '#475569' }}>Next up by bucket</div>
+                                        <div className="rp-buckets">
+                                            {data.perBucket.map(({ bucket, rows }) => {
+                                                const n = rows[0];
+                                                const d = n ? n.daysSinceByBucket[bucket.id] : undefined;
+                                                return (
+                                                    <div key={bucket.id} className="rp-bkt">
+                                                        <div><span className="rp-dot" style={{ background: bucket.color }}></span><strong>{bucket.name}</strong> <span className="rp-muted">{formatMilTime(bucket.start)}–{formatMilTime(bucket.end)}Z</span></div>
+                                                        <div style={{ fontWeight: 700 }}>{n ? n.crew.crewName : '—'}</div>
+                                                        {n && <div className="rp-muted" style={{ fontSize: 12 }}>{d === undefined ? 'never in this bucket' : `last in bucket ${sinceLabel(d).toLowerCase()}`}</div>}
+                                                    </div>
+                                                );
+                                            })}
+                                        </div>
+                                    </div>
+                                )}
                                 <table className="rp-glance" style={{ marginTop: 18 }}>
                                     <thead><tr><th>Crew</th><th>Last flown</th><th>Sorties ({period}d)</th><th>GARs ({period}d)</th></tr></thead>
                                     <tbody>
