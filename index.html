@@ -115,6 +115,19 @@
         .rp-sheet .rp-muted { color: #64748b; }
         .rp-sheet .rp-flag { font-weight: 700; color: #b91c1c; }
         .rp-sheet .rp-next { font-weight: 800; color: #1d4ed8; }
+        .rp-sheet .rp-hero { display: flex; gap: 12px; margin-top: 16px; }
+        .rp-sheet .rp-hero > div { flex: 1; border: 2px solid #111827; border-radius: 10px; padding: 10px 14px; }
+        .rp-sheet .rp-hero .rp-kicker { font-size: 11px; font-weight: 800; letter-spacing: .08em; text-transform: uppercase; color: #475569; }
+        .rp-sheet .rp-hero .rp-big { font-size: 20px; font-weight: 800; line-height: 1.2; margin-top: 2px; }
+        .rp-sheet .rp-glance td { padding: 9px 8px 9px 0; vertical-align: middle; font-size: 14px; }
+        .rp-sheet .rp-glance th { font-size: 11px; }
+        .rp-sheet .rp-pill { display: inline-block; padding: 2px 9px; border-radius: 999px; font-weight: 700; font-size: 12px; white-space: nowrap; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+        .rp-sheet .rp-red { background: #fee2e2; color: #b91c1c; }
+        .rp-sheet .rp-amber { background: #fef3c7; color: #b45309; }
+        .rp-sheet .rp-green { background: #dcfce7; color: #15803d; }
+        .rp-sheet .rp-tag { display: inline-block; margin-left: 6px; padding: 1px 7px; border-radius: 4px; background: #1d4ed8; color: #fff; font-size: 10px; font-weight: 800; letter-spacing: .05em; vertical-align: middle; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+        .rp-sheet .rp-tag.rp-tag-gar { background: #d97706; }
+        .rp-sheet .rp-mini { display: inline-block; height: 12px; border-radius: 3px; vertical-align: middle; margin-right: 6px; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
         .rp-sheet .rp-chart { margin-top: 6px; }
         .rp-sheet .rp-chart-row { display: flex; align-items: center; gap: 10px; padding: 3px 0; break-inside: avoid; }
         .rp-sheet .rp-chart-label { width: 190px; flex: none; font-weight: 600; }
@@ -1172,6 +1185,7 @@
             const [period, setPeriod] = useState(appPeriod);
             const [title, setTitle] = useState('Crew Flying Report');
             const [message, setMessage] = useState('');
+            const [view, setView] = useState('glance'); // glance | detailed
             const [inc, setInc] = useState({ flying: true, time30: true, charts: true, buckets: true, gar: true, garHistory: true, notes: false });
             const [copied, setCopied] = useState('');
             const toggle = (k) => setInc(prev => ({ ...prev, [k]: !prev[k] }));
@@ -1199,7 +1213,9 @@
                 const byName = (a, b) => a.crew.crewName.localeCompare(b.crew.crewName);
                 const sortieRows = stats.map(s => ({ crew: s.crew, value: s.sorties })).sort((a, b) => b.value - a.value || byName(a, b));
                 const garRows = crews.map(c => ({ crew: c, value: garInWindow[c.id] || 0, total: totals[c.id] || 0 })).sort((a, b) => b.value - a.value || b.total - a.total || byName(a, b));
-                return { stats, entries, rotation, from, flightNotes, sortieRows, garRows, perBucket: sorted.map(b => ({ bucket: b, ...bucketBreakdown(b, stats, crews) })) };
+                const rotById = Object.fromEntries(rotation.map(r => [r.crew.id, r]));
+                const glanceRows = stats.map(s => ({ crew: s.crew, last: s.last, daysSince: s.daysSince, sorties: s.sorties, garWin: garInWindow[s.crew.id] || 0, garLast: rotById[s.crew.id].last, garDays: rotById[s.crew.id].daysSince, time30: s.crew.time30 }));
+                return { stats, entries, rotation, from, flightNotes, sortieRows, garRows, glanceRows, flyNext: stats[0], garNext: rotation[0], perBucket: sorted.map(b => ({ bucket: b, ...bucketBreakdown(b, stats, crews) })) };
             }, [crews, buckets, log, notes, gar, asOf, period]);
 
             const time30Text = (c) => c.time30 && c.time30.hours !== '' && c.time30.hours != null ? `${c.time30.hours} h${c.time30.asOf ? ` (as of ${c.time30.asOf})` : ''}` : '—';
@@ -1207,6 +1223,16 @@
 
             const text = useMemo(() => {
                 const L = [];
+                if (view === 'glance') {
+                    L.push(`${title.toUpperCase()}`, `As of ${prettyDate(asOf)} · last ${period} days`);
+                    if (message.trim()) L.push('', message.trim());
+                    L.push('');
+                    if (data.flyNext) L.push(`FLY NEXT: ${data.flyNext.crew.crewName} (${data.flyNext.last ? `last flew ${sinceLabel(data.flyNext.daysSince).toLowerCase()}` : 'has not flown'})`);
+                    if (data.garNext) L.push(`GAR NEXT: ${data.garNext.crew.crewName} (${data.garNext.last ? `last GAR ${sinceLabel(data.garNext.daysSince).toLowerCase()}` : 'no GAR yet'})`);
+                    L.push('', 'CREW · LAST FLOWN · SORTIES · GARs');
+                    data.glanceRows.forEach((r, i) => L.push(`${i + 1}. ${r.crew.crewName} · ${r.last ? sinceLabel(r.daysSince).toLowerCase() : 'never'} · ${r.sorties} · ${r.garWin}`));
+                    return L.join('\n');
+                }
                 L.push(`${title.toUpperCase()}`);
                 L.push(`As of ${prettyDate(asOf)} · last ${period} days`);
                 if (message.trim()) L.push('', message.trim());
@@ -1243,7 +1269,7 @@
                     data.flightNotes.forEach(n => L.push(`${n.date} ${n.bucket} — ${n.crew}: ${n.text}`));
                 }
                 return L.join('\n');
-            }, [data, title, message, asOf, period, inc]);
+            }, [data, title, message, asOf, period, inc, view]);
 
             const copyText = async () => {
                 try {
@@ -1292,6 +1318,15 @@
                                 className="w-full text-sm border border-slate-300 rounded-lg p-2 focus:ring-2 focus:ring-blue-500 outline-none"></textarea>
                         </div>
                         <div>
+                            <label className="block text-xs font-bold text-slate-600 mb-2">Layout</label>
+                            <div className="inline-flex bg-white border border-slate-200 rounded-lg shadow-sm p-1 gap-1">
+                                {[['glance', 'Quick glance'], ['detailed', 'Full detail']].map(([k, label]) => (
+                                    <button key={k} type="button" onClick={() => setView(k)} aria-pressed={view === k}
+                                        className={`px-3 py-1 rounded-md text-sm font-bold transition-colors ${view === k ? 'bg-slate-900 text-white' : 'text-slate-600 hover:bg-slate-100'}`}>{label}</button>
+                                ))}
+                            </div>
+                        </div>
+                        {view === 'detailed' && <div>
                             <label className="block text-xs font-bold text-slate-600 mb-2">Include</label>
                             <div className="flex flex-wrap gap-2">
                                 {options.map(([k, label]) => (
@@ -1302,7 +1337,7 @@
                                 ))}
                             </div>
                             {inc.notes && <p className="text-xs text-amber-700 font-semibold mt-2"><i className="fa-solid fa-triangle-exclamation mr-1"></i>Flying log notes will be visible to everyone you share this with.</p>}
-                        </div>
+                        </div>}
                         <div className="flex flex-wrap gap-2 pt-1">
                             <button onClick={() => window.print()} className="px-4 py-2 rounded-lg font-bold text-sm text-white bg-blue-600 hover:bg-blue-700"><i className="fa-solid fa-print mr-2"></i>Print / Save PDF</button>
                             <button onClick={copyText} className="px-4 py-2 rounded-lg font-bold text-sm text-slate-700 bg-slate-100 hover:bg-slate-200 border border-slate-200"><i className="fa-regular fa-copy mr-2"></i>{copied || 'Copy as text'}</button>
@@ -1315,6 +1350,42 @@
                         <div className="rp-sub">As of {prettyDate(asOf)} · flying over the last {period} days ({data.from} to {asOf})</div>
                         {message.trim() && <div className="rp-msg">{message.trim()}</div>}
 
+                        {view === 'glance' && (
+                            <>
+                                <div className="rp-hero">
+                                    <div>
+                                        <div className="rp-kicker">Fly next</div>
+                                        <div className="rp-big">{data.flyNext ? data.flyNext.crew.crewName : '—'}</div>
+                                        <div className="rp-muted">{data.flyNext ? (data.flyNext.last ? `last flew ${sinceLabel(data.flyNext.daysSince).toLowerCase()}` : 'has not flown yet') : ''}</div>
+                                    </div>
+                                    <div>
+                                        <div className="rp-kicker">GAR next</div>
+                                        <div className="rp-big">{data.garNext ? data.garNext.crew.crewName : '—'}</div>
+                                        <div className="rp-muted">{data.garNext ? (data.garNext.last ? `last GAR ${sinceLabel(data.garNext.daysSince).toLowerCase()}` : 'no GAR yet') : ''}</div>
+                                    </div>
+                                </div>
+                                <table className="rp-glance" style={{ marginTop: 18 }}>
+                                    <thead><tr><th>Crew</th><th>Last flown</th><th>Sorties ({period}d)</th><th>GARs ({period}d)</th></tr></thead>
+                                    <tbody>
+                                        {data.glanceRows.map((r, i) => {
+                                            const sMax = Math.max(1, ...data.glanceRows.map(x => x.sorties));
+                                            const tone = r.daysSince === null || r.daysSince >= 14 ? 'rp-red' : r.daysSince >= 7 ? 'rp-amber' : 'rp-green';
+                                            return (
+                                                <tr key={r.crew.id}>
+                                                    <td><strong>{r.crew.crewName}</strong>{i === 0 && <span className="rp-tag">FLY NEXT</span>}{data.garNext && data.garNext.crew.id === r.crew.id && <span className="rp-tag rp-tag-gar">GAR NEXT</span>}</td>
+                                                    <td><span className={`rp-pill ${tone}`}>{r.last ? sinceLabel(r.daysSince) : 'Never'}</span></td>
+                                                    <td><span className="rp-mini" style={{ width: `${(r.sorties / sMax) * 80}px`, minWidth: r.sorties ? 4 : 0, background: '#2563eb' }}></span><strong>{r.sorties}</strong></td>
+                                                    <td><strong>{r.garWin}</strong>{r.garLast ? <span className="rp-muted"> · last {sinceLabel(r.garDays).toLowerCase()}</span> : <span className="rp-muted"> · none yet</span>}</td>
+                                                </tr>
+                                            );
+                                        })}
+                                    </tbody>
+                                </table>
+                                <div className="rp-muted" style={{ marginTop: 8, fontSize: 12 }}>Fly next = longest since last flight. GAR next = longest since last ground alert. <span className="rp-pill rp-green">under 7 days</span> <span className="rp-pill rp-amber">7–13 days</span> <span className="rp-pill rp-red">14+ days or never</span></div>
+                            </>
+                        )}
+
+                        {view === 'detailed' && (<>
                         {inc.flying && (
                             <>
                                 <h2>Flying — longest gap first</h2>
@@ -1409,6 +1480,8 @@
                                 </table>
                             </>
                         )}
+
+                        </>)}
 
                         <div className="rp-muted" style={{ marginTop: 22, fontSize: 11 }}>Generated {prettyDate(today)} from the Crew Flying Tracker. Times in Zulu.</div>
                     </div>
