@@ -244,7 +244,7 @@
 
         // App state -> Firestore documents (all in the `tracker` collection):
         //   crew-<id>, bucket-<id>, day-<date> (that day's log + notes), gar-<date>.
-        const buildDocs = (crews, buckets, log, notes, gar) => {
+        const buildDocs = (crews, buckets, log, notes, gar, garFlags = {}) => {
             const docs = {};
             let maxOrder = Math.max(-1, ...crews.map(c => Number.isFinite(c.order) ? c.order : -1));
             crews.forEach(c => { docs[`crew-${c.id}`] = clean({ ...c, type: 'crew', order: Number.isFinite(c.order) ? c.order : ++maxOrder }); });
@@ -254,8 +254,13 @@
                 const [d, bucketId, crewId] = key.split('|');
                 (dayNotes[d] = dayNotes[d] || {})[`${bucketId}|${crewId}`] = text;
             });
-            new Set([...Object.keys(log), ...Object.keys(dayNotes)]).forEach(d => {
-                docs[`day-${d}`] = clean({ type: 'day', date: d, byBucket: log[d] || {}, notes: dayNotes[d] || {} });
+            const dayGars = {};
+            Object.keys(garFlags).filter(k => garFlags[k]).forEach(key => {
+                const [d, bucketId, crewId] = key.split('|');
+                (dayGars[d] = dayGars[d] || {})[`${bucketId}|${crewId}`] = true;
+            });
+            new Set([...Object.keys(log), ...Object.keys(dayNotes), ...Object.keys(dayGars)]).forEach(d => {
+                docs[`day-${d}`] = clean({ type: 'day', date: d, byBucket: log[d] || {}, notes: dayNotes[d] || {}, ...(dayGars[d] ? { gars: dayGars[d] } : {}) });
             });
             Object.entries(gar).forEach(([d, e]) => { docs[`gar-${d}`] = clean({ type: 'gar', date: d, crewId: e.crewId, note: e.note || '' }); });
             return docs;
@@ -268,7 +273,7 @@
             } catch (e) { return null; }
             return {
                 crews: loadStored('flyfair_crews', []), buckets: loadStored('flyfair_buckets', []),
-                log: loadStored('flyfair_log', {}), notes: loadStored('flyfair_notes', {}), gar: loadStored('flyfair_gar', {})
+                log: loadStored('flyfair_log', {}), notes: loadStored('flyfair_notes', {}), gar: loadStored('flyfair_gar', {}), garFlags: loadStored('flyfair_garflags', {})
             };
         };
 
@@ -333,19 +338,21 @@
         // A Flying Log note that mentions "GAR" counts as that crew pulling the ground alert that day.
         const isGarNote = (text) => /\bGAR\b/i.test(text || '');
 
-        // Every GAR up to `today`: manually logged ones plus Flying Log entries whose note mentions "GAR".
-        const collectGarEntries = (crews, gar, notes, buckets, today) => {
+        // Every GAR up to `today`: manually logged ones, Flying Log entries marked with the GAR designator,
+        // and (for older entries) Flying Log notes that mention "GAR".
+        const collectGarEntries = (crews, gar, notes, buckets, today, garFlags = {}) => {
             const crewIds = new Set(crews.map(c => c.id));
             const bucketNames = Object.fromEntries((buckets || []).map(b => [b.id, b.name]));
             const list = [];
             Object.entries(gar).forEach(([d, e]) => {
                 if (d <= today && crewIds.has(e.crewId)) list.push({ id: `m|${d}`, date: d, crewId: e.crewId, note: e.note || '', source: 'manual' });
             });
-            Object.entries(notes || {}).forEach(([key, text]) => {
+            const keys = new Set([...Object.keys(garFlags || {}).filter(k => garFlags[k]), ...Object.keys(notes || {}).filter(k => isGarNote(notes[k]))]);
+            keys.forEach(key => {
                 const [d, bucketId, crewId] = key.split('|');
-                if (!isGarNote(text) || d > today || !crewIds.has(crewId)) return;
-                if (list.some(x => x.date === d && x.crewId === crewId)) return; // already logged manually
-                list.push({ id: `n|${key}`, date: d, crewId, note: text, source: 'log', bucketName: bucketNames[bucketId] || '' });
+                if (d > today || !crewIds.has(crewId)) return;
+                if (list.some(x => x.date === d && x.crewId === crewId)) return; // already counted
+                list.push({ id: `n|${key}`, date: d, crewId, note: (notes || {})[key] || '', source: 'log', bucketName: bucketNames[bucketId] || '' });
             });
             return list.sort((a, b) => b.date.localeCompare(a.date));
         };
@@ -823,8 +830,9 @@
             );
         };
 
-        const DayPanel = ({ date, crews, buckets, log, notes, period, onAdd, onRemove, onSetNote, onClose }) => {
+        const DayPanel = ({ date, crews, buckets, log, notes, garFlags, period, onAdd, onRemove, onSetNote, onSetGar, onClose }) => {
             const [drafts, setDrafts] = useState({});
+            const [garDrafts, setGarDrafts] = useState({});
             const [editingKey, setEditingKey] = useState(null);
             const stats = useMemo(() => {
                 const ranked = rankByFairness(computeCrewStats(crews, buckets, log, date, false, period));
@@ -873,6 +881,7 @@
                                             const clash = others.filter(b => bucketsOverlap(b, bucket));
                                             const key = noteKey(date, bucket.id, crewId);
                                             const note = notes[key] || '';
+                                            const isGar = !!garFlags[key] || isGarNote(note);
                                             return (
                                                 <div key={crewId} className="flex items-center justify-between gap-2 bg-slate-50 border border-slate-200 rounded-lg px-3 py-2">
                                                     <div className="min-w-0">
@@ -886,26 +895,35 @@
                                                                 onKeyDown={e => { if (e.key === 'Enter') e.target.blur(); if (e.key === 'Escape') { e.target.value = note; e.target.blur(); } }}
                                                                 className="mt-1 w-full text-xs border border-slate-300 rounded p-1 outline-none focus:ring-2 focus:ring-blue-500" />
                                                         ) : note ? (
-                                                            <button onClick={() => setEditingKey(key)} className="mt-1 text-left text-xs text-slate-700 italic hover:text-blue-700" title="Edit note"><i className="fa-regular fa-note-sticky mr-1 text-slate-400"></i>{note}{isGarNote(note) && <span className="ml-2 not-italic bg-blue-100 text-blue-700 border border-blue-200 text-[10px] font-bold px-1.5 py-0.5 rounded">GAR</span>}</button>
+                                                            <button onClick={() => setEditingKey(key)} className="mt-1 text-left text-xs text-slate-700 italic hover:text-blue-700" title="Edit note"><i className="fa-regular fa-note-sticky mr-1 text-slate-400"></i>{note}</button>
                                                         ) : (
                                                             <button onClick={() => setEditingKey(key)} className="mt-1 text-xs text-slate-400 hover:text-blue-600"><i className="fa-solid fa-plus mr-1"></i>Add note</button>
                                                         )}
                                                     </div>
-                                                    <button onClick={() => onRemove(date, bucket.id, crewId)} className="text-slate-400 hover:text-red-600 p-1" title="Remove"><i className="fa-solid fa-trash"></i></button>
+                                                    <div className="flex items-center gap-1 flex-shrink-0">
+                                                        <button onClick={() => onSetGar(date, bucket.id, crewId, !isGar)} aria-pressed={isGar} title={isGar ? 'On GAR — click to clear' : 'Mark as on GAR'}
+                                                            className={`px-2 py-0.5 text-xs font-bold rounded-full border ${isGar ? 'bg-blue-600 text-white border-blue-600' : 'bg-white text-slate-500 border-slate-300 hover:bg-slate-50'}`}>GAR</button>
+                                                        <button onClick={() => onRemove(date, bucket.id, crewId)} className="text-slate-400 hover:text-red-600 p-1" title="Remove"><i className="fa-solid fa-trash"></i></button>
+                                                    </div>
                                                 </div>
                                             );
                                         })}
                                         {available.length > 0 && (
                                             <>
-                                            <input type="text" maxLength={200} value={drafts[bucket.id] || ''} placeholder="Quick note — add “GAR” to log a ground alert"
-                                                onChange={e => setDrafts({ ...drafts, [bucket.id]: e.target.value })}
-                                                className="w-full text-sm bg-white border border-slate-300 rounded-lg p-2 focus:ring-2 focus:ring-blue-500 outline-none" />
+                                            <div className="flex gap-2">
+                                                <input type="text" maxLength={200} value={drafts[bucket.id] || ''} placeholder="Quick note (optional)"
+                                                    onChange={e => setDrafts({ ...drafts, [bucket.id]: e.target.value })}
+                                                    className="flex-1 min-w-0 text-sm bg-white border border-slate-300 rounded-lg p-2 focus:ring-2 focus:ring-blue-500 outline-none" />
+                                                <button type="button" onClick={() => setGarDrafts({ ...garDrafts, [bucket.id]: !garDrafts[bucket.id] })} aria-pressed={!!garDrafts[bucket.id]} title="Mark this crew as on GAR"
+                                                    className={`px-3 text-sm font-bold rounded-lg border ${garDrafts[bucket.id] ? 'bg-blue-600 text-white border-blue-600' : 'bg-white text-slate-500 border-slate-300 hover:bg-slate-50'}`}>GAR</button>
+                                            </div>
                                             <select
                                                 value=""
                                                 onChange={e => {
                                                     if (!e.target.value) return;
-                                                    onAdd(date, bucket.id, e.target.value, (drafts[bucket.id] || '').trim());
+                                                    onAdd(date, bucket.id, e.target.value, (drafts[bucket.id] || '').trim(), !!garDrafts[bucket.id]);
                                                     setDrafts({ ...drafts, [bucket.id]: '' });
+                                                    setGarDrafts({ ...garDrafts, [bucket.id]: false });
                                                 }}
                                                 className="w-full text-sm bg-white border border-slate-300 rounded-lg p-2 focus:ring-2 focus:ring-blue-500 outline-none"
                                             >
@@ -928,7 +946,7 @@
             );
         };
 
-        const CalendarView = ({ crews, buckets, log, period, setPeriod, selectedDate, setSelectedDate, onAdd, onRemove, notes, onSetNote }) => {
+        const CalendarView = ({ crews, buckets, log, period, setPeriod, selectedDate, setSelectedDate, onAdd, onRemove, notes, onSetNote, garFlags, onSetGar }) => {
             const [cursor, setCursor] = useState(() => {
                 const [y, m] = (selectedDate || todayStr()).split('-').map(Number);
                 return { y, m: m - 1 };
@@ -1013,7 +1031,7 @@
 
                         <div className="xl:col-span-1">
                             {selectedDate ? (
-                                <DayPanel date={selectedDate} crews={crews} buckets={buckets} log={log} notes={notes} period={period} onAdd={onAdd} onRemove={onRemove} onSetNote={onSetNote} onClose={() => setSelectedDate(null)} />
+                                <DayPanel date={selectedDate} crews={crews} buckets={buckets} log={log} notes={notes} garFlags={garFlags} period={period} onAdd={onAdd} onRemove={onRemove} onSetNote={onSetNote} onSetGar={onSetGar} onClose={() => setSelectedDate(null)} />
                             ) : (
                                 <div className="bg-white rounded-xl shadow-sm border border-slate-200 p-8 text-center text-slate-400">
                                     <i className="fa-regular fa-calendar-check text-4xl mb-3"></i>
@@ -1027,13 +1045,13 @@
         };
 
 
-        const GarView = ({ crews, gar, notes, buckets, onLog, onRemove }) => {
+        const GarView = ({ crews, gar, notes, garFlags, buckets, onLog, onRemove }) => {
             const today = todayStr();
             const [date, setDate] = useState(today);
             const [crewId, setCrewId] = useState('');
             const [note, setNote] = useState('');
 
-            const entries = useMemo(() => collectGarEntries(crews, gar, notes, buckets, today), [crews, gar, notes, buckets, today]);
+            const entries = useMemo(() => collectGarEntries(crews, gar, notes, buckets, today, garFlags), [crews, gar, notes, buckets, today, garFlags]);
 
             const rotation = useMemo(() => computeGarRotation(crews, entries, today), [crews, entries, today]);
 
@@ -1055,7 +1073,7 @@
                 <div className="space-y-6">
                     <div>
                         <h2 className="text-2xl font-bold text-slate-800">Ground Alert (GAR)</h2>
-                        <p className="text-sm text-slate-500 mt-1">Every crew rotates through a 24-hour ground alert. The crew that has gone longest without one is next up. A Flying Log note containing "GAR" is counted automatically.</p>
+                        <p className="text-sm text-slate-500 mt-1">Every crew rotates through a 24-hour ground alert. The crew that has gone longest without one is next up. Crews marked GAR in the Flying Log are counted automatically.</p>
                     </div>
 
                     <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
@@ -1140,7 +1158,7 @@
                             <div className="bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden">
                                 <div className="p-4 border-b border-slate-200 bg-slate-50"><h3 className="font-bold text-slate-700 uppercase tracking-wider text-sm">History</h3></div>
                                 <div className="divide-y divide-slate-100 max-h-[320px] overflow-y-auto">
-                                    {history.length === 0 && <p className="p-6 text-center text-sm text-slate-400">No GARs logged yet. Log one here, or put "GAR" in a Flying Log note.</p>}
+                                    {history.length === 0 && <p className="p-6 text-center text-sm text-slate-400">No GARs logged yet. Log one here, or mark a crew GAR in the Flying Log.</p>}
                                     {history.map(e => (
                                         <div key={e.id} className="px-4 py-3 flex items-center justify-between gap-2">
                                             <div className="min-w-0">
@@ -1179,7 +1197,7 @@
         };
 
         // --- REPORT (shareable summary for the crews) ---
-        const ReportView = ({ crews, buckets, log, notes, gar, period: appPeriod }) => {
+        const ReportView = ({ crews, buckets, log, notes, gar, garFlags, period: appPeriod }) => {
             const today = todayStr();
             const [asOf, setAsOf] = useState(today);
             const [period, setPeriod] = useState(appPeriod);
@@ -1195,7 +1213,7 @@
 
             const data = useMemo(() => {
                 const stats = rankByFairness(computeCrewStats(crews, buckets, log, asOf, true, period));
-                const entries = collectGarEntries(crews, gar, notes, buckets, asOf);
+                const entries = collectGarEntries(crews, gar, notes, buckets, asOf, garFlags);
                 const rotation = computeGarRotation(crews, entries, asOf);
                 const from = addDays(asOf, -period + 1);
                 const flightNotes = [];
@@ -1216,7 +1234,7 @@
                 const rotById = Object.fromEntries(rotation.map(r => [r.crew.id, r]));
                 const glanceRows = stats.map(s => ({ crew: s.crew, last: s.last, daysSince: s.daysSince, sorties: s.sorties, garWin: garInWindow[s.crew.id] || 0, garLast: rotById[s.crew.id].last, garDays: rotById[s.crew.id].daysSince, time30: s.crew.time30 }));
                 return { stats, entries, rotation, from, flightNotes, sortieRows, garRows, glanceRows, flyNext: stats[0], garNext: rotation[0], perBucket: sorted.map(b => ({ bucket: b, ...bucketBreakdown(b, stats, crews) })) };
-            }, [crews, buckets, log, notes, gar, asOf, period]);
+            }, [crews, buckets, log, notes, gar, garFlags, asOf, period]);
 
             const time30Text = (c) => c.time30 && c.time30.hours !== '' && c.time30.hours != null ? `${c.time30.hours} h${c.time30.asOf ? ` (as of ${c.time30.asOf})` : ''}` : '—';
             const lastText = (s) => s.last ? `${s.last} (${sinceLabel(s.daysSince).toLowerCase()})` : 'never';
@@ -1536,6 +1554,7 @@
             const [buckets, setBuckets] = useState(() => cloud ? [] : loadStored('flyfair_buckets', INITIAL_BUCKETS));
             const [log, setLog] = useState(() => cloud ? {} : loadStored('flyfair_log', buildSeedLog()));
             const [notes, setNotes] = useState(() => cloud ? {} : loadStored('flyfair_notes', {}));
+            const [garFlags, setGarFlags] = useState(() => cloud ? {} : loadStored('flyfair_garflags', {}));
             const [gar, setGar] = useState(() => cloud ? {} : loadStored('flyfair_gar', buildSeedGar()));
             const [period, setPeriod] = useState(() => loadStored('flyfair_period', 30));
             const [selectedDate, setSelectedDate] = useState(todayStr());
@@ -1552,7 +1571,7 @@
             const remoteDirty = useRef(false);  // set while a remote change is applied but not yet rendered
             const flushTimer = useRef(null);
             const pendingImport = useRef(null);
-            latestRef.current = { crews, buckets, log, notes, gar };
+            latestRef.current = { crews, buckets, log, notes, gar, garFlags };
 
             const applyChanges = (upserts, removals) => {
                 remoteDirty.current = true;
@@ -1596,6 +1615,12 @@
                         const next = {};
                         Object.entries(prev).forEach(([k, v]) => { if (!touched.has(k.split('|')[0])) next[k] = v; });
                         dayUp.forEach(d => Object.entries(d.notes || {}).forEach(([k, v]) => { next[`${d.date}|${k}`] = v; }));
+                        return next;
+                    });
+                    setGarFlags(prev => {
+                        const next = {};
+                        Object.entries(prev).forEach(([k, v]) => { if (!touched.has(k.split('|')[0])) next[k] = v; });
+                        dayUp.forEach(d => Object.keys(d.gars || {}).forEach(k => { next[`${d.date}|${k}`] = true; }));
                         return next;
                     });
                 }
@@ -1649,8 +1674,8 @@
                 clearTimeout(flushTimer.current);
                 flushTimer.current = setTimeout(() => {
                     if (remoteDirty.current) return; // a remote change is mid-render; the next render reschedules
-                    const { crews: c, buckets: b, log: l, notes: n, gar: g } = latestRef.current;
-                    const desired = buildDocs(c, b, l, n, g);
+                    const { crews: c, buckets: b, log: l, notes: n, gar: g, garFlags: gf } = latestRef.current;
+                    const desired = buildDocs(c, b, l, n, g, gf);
                     const ops = [];
                     Object.entries(desired).forEach(([id, data]) => { const cj = canon(data); if (remoteRef.current[id] !== cj) ops.push({ id, data, cj }); });
                     Object.keys(remoteRef.current).forEach(id => { if (!(id in desired)) ops.push({ id, del: true }); });
@@ -1674,11 +1699,11 @@
                     });
                 }, 300);
                 return () => clearTimeout(flushTimer.current);
-            }, [cloud, syncState, crews, buckets, log, notes, gar, retryTick]);
+            }, [cloud, syncState, crews, buckets, log, notes, gar, garFlags, retryTick]);
 
             const importLocalData = () => {
                 const l = pendingImport.current;
-                if (l) { setCrews(l.crews); setBuckets(l.buckets); setLog(l.log); setNotes(l.notes); setGar(l.gar); }
+                if (l) { setCrews(l.crews); setBuckets(l.buckets); setLog(l.log); setNotes(l.notes); setGar(l.gar); setGarFlags(l.garFlags || {}); }
                 setSyncState('ready');
             };
             const [modalConfig, setModalConfig] = useState({ isOpen: false, type: null, data: null });
@@ -1697,6 +1722,7 @@
                         localStorage.setItem('flyfair_buckets', JSON.stringify(buckets));
                         localStorage.setItem('flyfair_log', JSON.stringify(log));
                         localStorage.setItem('flyfair_notes', JSON.stringify(notes));
+                        localStorage.setItem('flyfair_garflags', JSON.stringify(garFlags));
                         localStorage.setItem('flyfair_gar', JSON.stringify(gar));
                         localStorage.setItem('flyfair_period', JSON.stringify(period));
                         setSaveStatus('Saved Offline');
@@ -1706,7 +1732,7 @@
                     clearTimer = setTimeout(() => setSaveStatus(''), 2000);
                 }, 500);
                 return () => { clearTimeout(timer); clearTimeout(clearTimer); };
-            }, [cloud, crews, buckets, log, notes, gar, period]);
+            }, [cloud, crews, buckets, log, notes, gar, garFlags, period]);
 
             // log[date][bucketId] = [crewId, ...]; empty buckets and days are pruned.
             const handleSetNote = (date, bucketId, crewId, text) => {
@@ -1718,8 +1744,21 @@
                     return next;
                 });
             };
-            const handleAddToBucket = (date, bucketId, crewId, note) => {
+            const handleSetGarFlag = (date, bucketId, crewId, on) => {
+                const key = noteKey(date, bucketId, crewId);
+                setGarFlags(prev => {
+                    const next = { ...prev };
+                    if (on) next[key] = true; else delete next[key];
+                    return next;
+                });
+                const text = notes[key];
+                if (!on && text && isGarNote(text)) { // older entries marked GAR by typing it in the note: clear that too
+                    handleSetNote(date, bucketId, crewId, text.replace(/\bGAR\b/gi, '').replace(/\s{2,}/g, ' ').replace(/^[\s,;:\-–]+|[\s,;:\-–]+$/g, ''));
+                }
+            };
+            const handleAddToBucket = (date, bucketId, crewId, note, isGar) => {
                 if (note) handleSetNote(date, bucketId, crewId, note);
+                if (isGar) setGarFlags(prev => ({ ...prev, [noteKey(date, bucketId, crewId)]: true }));
                 setLog(prev => {
                     const day = prev[date] || {};
                     const ids = day[bucketId] || [];
@@ -1729,6 +1768,7 @@
             };
             const handleRemoveFromBucket = (date, bucketId, crewId) => {
                 handleSetNote(date, bucketId, crewId, '');
+                setGarFlags(prev => { const next = { ...prev }; delete next[noteKey(date, bucketId, crewId)]; return next; });
                 setLog(prev => {
                     const day = { ...(prev[date] || {}) };
                     const ids = (day[bucketId] || []).filter(id => id !== crewId);
@@ -1740,6 +1780,10 @@
             };
 
             const pruneLog = (shouldKeep) => {
+                setGarFlags(prev => Object.fromEntries(Object.entries(prev).filter(([key]) => {
+                    const [, bucketId, crewId] = key.split('|');
+                    return shouldKeep(bucketId, crewId);
+                })));
                 setNotes(prev => Object.fromEntries(Object.entries(prev).filter(([key]) => {
                     const [, bucketId, crewId] = key.split('|');
                     return shouldKeep(bucketId, crewId);
@@ -1769,6 +1813,7 @@
                         setBuckets(INITIAL_BUCKETS);
                         setLog(buildSeedLog());
                         setNotes({});
+                        setGarFlags({});
                         setGar(buildSeedGar());
                         setPeriod(30);
                     }
@@ -1874,10 +1919,10 @@
                         <div className="max-w-7xl mx-auto h-full">
                             {cloudUnavailable && <div className="no-print mb-4 text-sm text-amber-800 bg-amber-50 border border-amber-200 rounded-lg p-3"><i className="fa-solid fa-triangle-exclamation mr-2"></i>Cloud sync could not load, so this page is working offline with data saved on this device only. Reload to try again.</div>}
                             {activeTab === 'dashboard' && <DashboardView crews={crews} buckets={buckets} log={log} period={period} setPeriod={setPeriod} onUpdateCrew={handleUpdateCrew} />}
-                            {activeTab === 'calendar' && <CalendarView crews={crews} buckets={buckets} log={log} period={period} setPeriod={setPeriod} selectedDate={selectedDate} setSelectedDate={setSelectedDate} onAdd={handleAddToBucket} onRemove={handleRemoveFromBucket} notes={notes} onSetNote={handleSetNote} />}
+                            {activeTab === 'calendar' && <CalendarView crews={crews} buckets={buckets} log={log} period={period} setPeriod={setPeriod} selectedDate={selectedDate} setSelectedDate={setSelectedDate} onAdd={handleAddToBucket} onRemove={handleRemoveFromBucket} notes={notes} onSetNote={handleSetNote} garFlags={garFlags} onSetGar={handleSetGarFlag} />}
 
-                            {activeTab === 'report' && <ReportView crews={crews} buckets={buckets} log={log} notes={notes} gar={gar} period={period} />}
-                            {activeTab === 'gar' && <GarView crews={crews} gar={gar} notes={notes} buckets={buckets} onLog={handleLogGar} onRemove={handleRemoveGar} />}
+                            {activeTab === 'report' && <ReportView crews={crews} buckets={buckets} log={log} notes={notes} gar={gar} garFlags={garFlags} period={period} />}
+                            {activeTab === 'gar' && <GarView crews={crews} gar={gar} notes={notes} garFlags={garFlags} buckets={buckets} onLog={handleLogGar} onRemove={handleRemoveGar} />}
 
                             {activeTab === 'buckets' && (
                                 <SimpleListView
