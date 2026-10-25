@@ -356,6 +356,13 @@
         const pad2 = (n) => String(n).padStart(2, '0');
         const toDateStr = (d) => `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`;
         const todayStr = () => toDateStr(new Date());
+        const TASKING_NOTE = 'These stats count how often crews were scheduled (tasked), not whether they actually flew. A crew logged on 5 flights who lost one to a maintenance issue still shows 5. The goal is an even distribution of ATO taskings.';
+        const TaskingNote = () => (
+            <div className="text-xs text-slate-500 bg-white border border-slate-200 rounded-lg px-3 py-2 flex gap-2 items-start">
+                <i className="fa-solid fa-circle-info mt-0.5"></i>
+                <span><strong>Based on scheduled taskings.</strong> {TASKING_NOTE.replace(/^These stats count/, 'Stats count')}</span>
+            </div>
+        );
         const addDays = (dateStr, n) => {
             const [y, m, d] = dateStr.split('-').map(Number);
             return toDateStr(new Date(y, m - 1, d + n));
@@ -809,6 +816,7 @@
                         </div>
                         <PeriodToggle value={period} onChange={setPeriod} />
                     </div>
+                    <TaskingNote />
 
                     {sorted.length > 0 && (
                         <div>
@@ -1180,6 +1188,7 @@
                         </div>
                         <PeriodToggle value={period} onChange={setPeriod} />
                     </div>
+                    <TaskingNote />
 
                     <div className="grid grid-cols-1 xl:grid-cols-3 gap-6 items-start">
                         <div className="xl:col-span-2 bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden">
@@ -1277,6 +1286,7 @@
                         <h2 className="text-2xl font-bold text-slate-800">Ground Alert (GAR)</h2>
                         <p className="text-sm text-slate-500 mt-1">Every crew rotates through a 24-hour ground alert. The crew that has gone longest without one is next up, and crews already scheduled for a later GAR come after those still waiting. Crews marked GAR in the Flying Log are counted automatically, including future days.</p>
                     </div>
+                    <TaskingNote />
 
                     <div className="grid grid-cols-2 xl:grid-cols-4 gap-3">
                         <div className="bg-white p-4 rounded-xl shadow-sm border border-slate-100">
@@ -1523,6 +1533,7 @@
                     L.push('', 'FLYING LOG NOTES');
                     data.flightNotes.forEach(n => L.push(`${n.date} ${n.bucket} — ${n.crew}: ${n.text}`));
                 }
+                L.push('', `Note: ${TASKING_NOTE}`);
                 return L.join('\n');
             }, [data, title, message, asOf, period, inc, view]);
 
@@ -1604,6 +1615,7 @@
                         <h1>{title || 'Crew Flying Report'}</h1>
                         <div className="rp-sub">As of {prettyDate(asOf)} · {period === 'all' ? 'flying over all time' : `flying over the last ${period} days (${data.from} to ${asOf})`}</div>
                         {message.trim() && <div className="rp-msg">{message.trim()}</div>}
+                        <div className="rp-muted" style={{ marginTop: 6, fontSize: 11 }}><strong>Note:</strong> {TASKING_NOTE}</div>
 
                         {view === 'glance' && (
                             <>
@@ -1911,6 +1923,7 @@
                             ))}
                         </div>
                     </div>
+                    <TaskingNote />
 
                     {!crews.length || !data.anyFlying ? (
                         <div className="bg-white rounded-xl shadow-sm border border-slate-200 p-10 text-center text-slate-400">
