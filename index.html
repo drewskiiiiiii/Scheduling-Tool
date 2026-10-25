@@ -468,7 +468,9 @@
 
         // --- FAIRNESS ENGINE ---
         // Flying "as of" a date: only days before asOf count (plus asOf itself when includeAsOf).
-        const computeCrewStats = (crews, buckets, log, asOf, includeAsOf, periodDays) => {
+        const garKeySet = (garFlags, notes) => new Set([...Object.keys(garFlags || {}).filter(k => garFlags[k]), ...Object.keys(notes || {}).filter(k => isGarNote(notes[k]))]);
+        // Log entries marked as GAR (designator or note) are ground alert, not flying, so `garKeys` leaves them out.
+        const computeCrewStats = (crews, buckets, log, asOf, includeAsOf, periodDays, garKeys) => {
             const bucketMap = Object.fromEntries(buckets.map(b => [b.id, b]));
             const windowStart = periodStart(asOf, periodDays);
             const stats = {};
@@ -482,6 +484,7 @@
                     crewIds.forEach(crewId => {
                         const s = stats[crewId];
                         if (!s) return;
+                        if (garKeys && garKeys.has(`${date}|${bucketId}|${crewId}`)) return;
                         if (counted) {
                             if (!s.last || date > s.last) s.last = date;
                             if (!s.lastByBucket[bucketId] || date > s.lastByBucket[bucketId]) s.lastByBucket[bucketId] = date;
@@ -511,6 +514,29 @@
             if (a.sorties !== b.sorties) return a.sorties - b.sorties;
             return a.crew.crewName.localeCompare(b.crew.crewName);
         });
+
+        // Recommendation for who flies next: blends sortie load (fewest in the period) with time since last flew
+        // (never = longest). Each is scaled 0-1 across available crews, then averaged 50/50.
+        const recommendFlyers = (stats) => {
+            const avail = stats.filter(s => !s.unavailable);
+            if (!avail.length) return [];
+            const sorts = avail.map(s => s.sorties);
+            const minS = Math.min(...sorts), maxS = Math.max(...sorts);
+            const known = avail.filter(s => s.daysSince !== null).map(s => s.daysSince);
+            const maxD = known.length ? Math.max(...known) : 0;
+            const avgS = sorts.reduce((a, c) => a + c, 0) / avail.length;
+            return avail.map(s => {
+                const load = maxS === minS ? 0.5 : (maxS - s.sorties) / (maxS - minS);
+                const gap = s.daysSince === null ? 1 : (maxD === 0 ? 0.5 : s.daysSince / maxD);
+                return { ...s, score: Math.round((load + gap) * 50), avgSorties: avgS };
+            }).sort((a, b) => {
+                if (b.score !== a.score) return b.score - a.score;
+                const da = a.daysSince === null ? Infinity : a.daysSince;
+                const db = b.daysSince === null ? Infinity : b.daysSince;
+                if (da !== db) return db - da;
+                return a.crew.crewName.localeCompare(b.crew.crewName);
+            });
+        };
 
         // Up-next order for the 24-hour GAR: never-done first, then longest since last GAR, then fewest total.
         // Whoever is on GAR today (asOf) goes to the bottom of this order only.
@@ -796,9 +822,18 @@
         };
 
         // --- VIEWS ---
-        const DashboardView = ({ crews, buckets, log, period, setPeriod, onUpdateCrew, canEdit = true, compact = false }) => {
+        const DashboardView = ({ crews, buckets, log, gar, notes, garFlags, period, setPeriod, onUpdateCrew, canEdit = true, compact = false }) => {
             const today = todayStr();
-            const stats = useMemo(() => rankByFairness(computeCrewStats(crews, buckets, log, today, true, period)), [crews, buckets, log, period, today]);
+            const stats = useMemo(() => rankByFairness(computeCrewStats(crews, buckets, log, today, true, period, garKeySet(garFlags, notes))), [crews, buckets, log, garFlags, notes, period, today]);
+            const recs = useMemo(() => recommendFlyers(stats), [stats]);
+            const garRows = useMemo(() => {
+                const all = collectGarEntries(crews, gar, notes, buckets, '9999-12-31', garFlags);
+                const start = periodStart(today, period);
+                const inPeriod = {};
+                all.forEach(e => { if (e.date <= today && e.date > start) inPeriod[e.crewId] = (inPeriod[e.crewId] || 0) + 1; });
+                return computeGarRotation(crews, all, today).map(r => ({ ...r, inPeriod: inPeriod[r.crew.id] || 0 }));
+            }, [crews, gar, notes, buckets, garFlags, period, today]);
+            const garMax = Math.max(1, ...garRows.map(r => r.inPeriod));
             const sorted = sortBuckets(buckets);
 
             const totalSorties = stats.reduce((sum, s) => sum + s.sorties, 0);
@@ -817,6 +852,32 @@
                         <PeriodToggle value={period} onChange={setPeriod} />
                     </div>
                     <TaskingNote />
+
+                    {recs.length > 0 && (
+                        <div className="bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden">
+                            <div className="p-4 border-b border-slate-200 bg-slate-50">
+                                <h3 className="font-bold text-slate-700 uppercase tracking-wider text-sm">Recommended to fly next</h3>
+                                <p className="text-xs text-slate-500 mt-1">Balances fewest sorties ({periodShort(period)}) with longest time since last flown, 50/50. GAR days are not counted as flying. Unavailable crews are skipped.</p>
+                            </div>
+                            <div className="divide-y divide-slate-100">
+                                {recs.slice(0, 3).map((r, i) => {
+                                    const diff = r.sorties - r.avgSorties;
+                                    return (
+                                        <div key={r.crew.id} className={`p-3 sm:p-4 flex items-center gap-3 ${i === 0 ? 'bg-blue-50/50' : ''}`}>
+                                            <span className={`w-7 h-7 rounded-full flex items-center justify-center text-sm font-black ${i === 0 ? 'bg-blue-600 text-white' : 'bg-slate-100 text-slate-500'}`}>{i + 1}</span>
+                                            <div className="flex-1 min-w-0">
+                                                <div className={`font-black leading-tight ${i === 0 ? 'text-lg text-blue-700' : 'text-slate-800'}`}>{r.crew.crewName}</div>
+                                                <div className="text-xs text-slate-500 mt-0.5">
+                                                    {r.sorties} {r.sorties === 1 ? 'sortie' : 'sorties'} ({diff === 0 ? 'at the average' : `${Math.abs(diff).toFixed(1)} ${diff < 0 ? 'below' : 'above'} average`}) · {r.last ? `last flew ${sinceLabel(r.daysSince).toLowerCase()}` : 'never flown'}
+                                                </div>
+                                            </div>
+                                            <div className="text-right"><div className="text-xl font-black text-slate-800">{r.score}</div><div className="text-[10px] font-bold uppercase tracking-widest text-slate-400">score</div></div>
+                                        </div>
+                                    );
+                                })}
+                            </div>
+                        </div>
+                    )}
 
                     {sorted.length > 0 && (
                         <div>
@@ -1013,6 +1074,41 @@
                             {sorted.length === 0 && <p className="text-sm text-slate-400">Create a flying bucket to see this breakdown.</p>}
                         </div>
                     </div>
+
+                    <div className="space-y-4">
+                        <div>
+                            <h3 className="text-lg font-bold text-slate-800">GAR Assignments</h3>
+                            <p className="text-sm text-slate-500">Ground alert is tracked separately from flying and is not included in the sortie counts above. Order is who is due next for the 24-hour GAR. Log GARs on the Ground Alert tab or with the GAR designator in the Flying Log.</p>
+                        </div>
+                        <div className="bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden">
+                            <table className="w-full text-left border-collapse">
+                                <thead>
+                                    <tr className="bg-slate-50 border-b border-slate-200 text-slate-500 text-xs uppercase tracking-wider font-bold">
+                                        <th className="p-3">#</th>
+                                        <th className="p-3">Crew</th>
+                                        <th className="p-3">Last GAR</th>
+                                        <th className="p-3">GARs ({periodShort(period)})</th>
+                                    </tr>
+                                </thead>
+                                <tbody className="divide-y divide-slate-100">
+                                    {garRows.map((r, i) => (
+                                        <tr key={r.crew.id} className="hover:bg-slate-50/80">
+                                            <td className="p-3 text-sm font-bold text-slate-400">{i + 1}</td>
+                                            <td className="p-3 text-sm font-bold text-slate-800">{r.crew.crewName}{r.unavailable && <UnavailTag className="ml-2" />}{i === 0 && !r.unavailable && !r.next && <span className="ml-2 text-xs font-bold text-blue-700 bg-blue-50 border border-blue-200 px-1.5 rounded">Next up</span>}{r.next && <span className="ml-2 text-xs text-slate-500">scheduled {r.next}</span>}</td>
+                                            <td className="p-3 text-sm font-bold text-slate-700">{r.last ? sinceLabel(r.daysSince) : 'No GAR yet'}{r.last && <div className="text-xs text-slate-500 font-mono font-normal">{r.last}</div>}</td>
+                                            <td className="p-3">
+                                                <div className="flex items-center gap-2">
+                                                    <div className="w-20 bg-slate-100 rounded-full h-2.5 overflow-hidden"><div className="bg-amber-500 h-full" style={{ width: `${(r.inPeriod / garMax) * 100}%` }}></div></div>
+                                                    <span className="text-sm font-bold text-slate-800">{r.inPeriod}</span>
+                                                </div>
+                                            </td>
+                                        </tr>
+                                    ))}
+                                    {garRows.length === 0 && <tr><td colSpan={4} className="p-6 text-center text-slate-400 text-sm">No crews yet.</td></tr>}
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
                 </div>
             );
         };
@@ -1022,7 +1118,7 @@
             const [garDrafts, setGarDrafts] = useState({});
             const [editingKey, setEditingKey] = useState(null);
             const stats = useMemo(() => {
-                const ranked = rankByFairness(computeCrewStats(crews, buckets, log, date, false, period));
+                const ranked = rankByFairness(computeCrewStats(crews, buckets, log, date, false, period, garKeySet(garFlags, notes)));
                 return Object.fromEntries(ranked.map((s, i) => [s.crew.id, { ...s, rank: i }]));
             }, [crews, buckets, log, date, period]);
             const orderedCrews = useMemo(() => Object.values(stats).sort((a, b) => a.rank - b.rank), [stats]);
@@ -1451,7 +1547,7 @@
             const crewName = Object.fromEntries(crews.map(c => [c.id, c.crewName]));
 
             const data = useMemo(() => {
-                const stats = rankByFairness(computeCrewStats(crews, buckets, log, asOf, true, period));
+                const stats = rankByFairness(computeCrewStats(crews, buckets, log, asOf, true, period, garKeySet(garFlags, notes)));
                 const allGar = collectGarEntries(crews, gar, notes, buckets, '9999-12-31', garFlags);
                 const entries = allGar.filter(e => e.date <= asOf);
                 const rotation = computeGarRotation(crews, allGar, asOf);
@@ -2588,7 +2684,7 @@
                     <main className={`flex-1 overflow-y-auto relative ${isMobile ? 'p-3' : 'p-8'}`} style={isMobile ? { paddingBottom: 'calc(env(safe-area-inset-bottom) + 16px)' } : undefined}>
                         <div className="max-w-7xl mx-auto h-full">
                             {cloudUnavailable && <div className="no-print mb-4 text-sm text-amber-800 bg-amber-50 border border-amber-200 rounded-lg p-3"><i className="fa-solid fa-triangle-exclamation mr-2"></i>Cloud sync could not load, so this page is working offline with data saved on this device only. Reload to try again.</div>}
-                            {activeTab === 'dashboard' && <DashboardView crews={crews} buckets={buckets} log={log} period={period} setPeriod={setPeriod} onUpdateCrew={handleUpdateCrew} canEdit={canEdit} compact={isMobile} />}
+                            {activeTab === 'dashboard' && <DashboardView crews={crews} buckets={buckets} log={log} gar={gar} notes={notes} garFlags={garFlags} period={period} setPeriod={setPeriod} onUpdateCrew={handleUpdateCrew} canEdit={canEdit} compact={isMobile} />}
                             {activeTab === 'calendar' && <CalendarView crews={crews} buckets={buckets} log={log} period={period} setPeriod={setPeriod} selectedDate={selectedDate} setSelectedDate={setSelectedDate} onAdd={handleAddToBucket} onRemove={handleRemoveFromBucket} notes={notes} onSetNote={handleSetNote} garFlags={garFlags} onSetGar={handleSetGarFlag} canEdit={canEdit} compact={isMobile} />}
 
                             {activeTab === 'trends' && <TrendsView crews={crews} buckets={buckets} log={log} gar={gar} notes={notes} garFlags={garFlags} compact={isMobile} />}
