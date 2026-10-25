@@ -822,10 +822,32 @@
         };
 
         // --- VIEWS ---
+        const RecRow = ({ r, i, bucketName }) => {
+            const diff = r.sorties - r.avgSorties;
+            return (
+                <div className={`p-3 sm:p-4 flex items-center gap-3 ${i === 0 ? 'bg-blue-50/50' : ''}`}>
+                    <span className={`w-7 h-7 rounded-full flex items-center justify-center text-sm font-black flex-shrink-0 ${i === 0 ? 'bg-blue-600 text-white' : 'bg-slate-100 text-slate-500'}`}>{i + 1}</span>
+                    <div className="flex-1 min-w-0">
+                        <div className={`font-black leading-tight ${i === 0 ? 'text-lg text-blue-700' : 'text-slate-800'}`}>{r.crew.crewName}</div>
+                        <div className="text-xs text-slate-500 mt-0.5">
+                            {r.sorties} {r.sorties === 1 ? 'sortie' : 'sorties'} ({diff === 0 ? 'at the average' : `${Math.abs(diff).toFixed(1)} ${diff < 0 ? 'below' : 'above'} average`}) · {r.last ? `last flew ${bucketName ? 'here ' : ''}${sinceLabel(r.daysSince).toLowerCase()}` : (bucketName ? 'never flown this bucket' : 'never flown')}
+                        </div>
+                    </div>
+                    <div className="text-right"><div className="text-xl font-black text-slate-800">{r.score}</div><div className="text-[10px] font-bold uppercase tracking-widest text-slate-400">score</div></div>
+                </div>
+            );
+        };
+
         const DashboardView = ({ crews, buckets, log, gar, notes, garFlags, period, setPeriod, onUpdateCrew, canEdit = true, compact = false }) => {
             const today = todayStr();
             const stats = useMemo(() => rankByFairness(computeCrewStats(crews, buckets, log, today, true, period, garKeySet(garFlags, notes))), [crews, buckets, log, garFlags, notes, period, today]);
             const recs = useMemo(() => recommendFlyers(stats), [stats]);
+            const sorted = useMemo(() => sortBuckets(buckets), [buckets]);
+            const [recMode, setRecMode] = useState('bucket');
+            const recsByBucket = useMemo(() => sorted.map(b => ({
+                bucket: b,
+                recs: recommendFlyers(bucketBreakdown(b, stats, crews).rows.map(r => ({ ...r, sorties: r.perBucket[b.id] || 0, last: r.lastByBucket[b.id] || null, daysSince: r.daysSinceByBucket[b.id] ?? null })))
+            })), [sorted, stats, crews]);
             const garRows = useMemo(() => {
                 const all = collectGarEntries(crews, gar, notes, buckets, '9999-12-31', garFlags);
                 const start = periodStart(today, period);
@@ -834,7 +856,6 @@
                 return computeGarRotation(crews, all, today).map(r => ({ ...r, inPeriod: inPeriod[r.crew.id] || 0 }));
             }, [crews, gar, notes, buckets, garFlags, period, today]);
             const garMax = Math.max(1, ...garRows.map(r => r.inPeriod));
-            const sorted = sortBuckets(buckets);
 
             const totalSorties = stats.reduce((sum, s) => sum + s.sorties, 0);
             const avg = stats.length ? totalSorties / stats.length : 0;
@@ -855,27 +876,37 @@
 
                     {recs.length > 0 && (
                         <div className="bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden">
-                            <div className="p-4 border-b border-slate-200 bg-slate-50">
-                                <h3 className="font-bold text-slate-700 uppercase tracking-wider text-sm">Recommended to fly next</h3>
-                                <p className="text-xs text-slate-500 mt-1">Balances fewest sorties ({periodShort(period)}) with longest time since last flown, 50/50. GAR days are not counted as flying. Unavailable crews are skipped.</p>
+                            <div className="p-4 border-b border-slate-200 bg-slate-50 flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                                <div>
+                                    <h3 className="font-bold text-slate-700 uppercase tracking-wider text-sm">Recommended to fly next</h3>
+                                    <p className="text-xs text-slate-500 mt-1">Balances fewest sorties ({periodShort(period)}) with longest time since last flown, 50/50{recMode === 'bucket' ? ', counting only flying in that bucket' : ''}. GAR days are not counted as flying. Unavailable crews are skipped.</p>
+                                </div>
+                                <div className="inline-flex bg-white border border-slate-200 rounded-lg shadow-sm p-1 gap-1 self-start">
+                                    {[['bucket', 'By bucket'], ['overall', 'Overall']].map(([k, label]) => (
+                                        <button key={k} onClick={() => setRecMode(k)} aria-pressed={recMode === k} className={`px-3 py-1 rounded-md text-sm font-bold transition-colors ${recMode === k ? 'bg-slate-900 text-white' : 'text-slate-600 hover:bg-slate-100'}`}>{label}</button>
+                                    ))}
+                                </div>
                             </div>
-                            <div className="divide-y divide-slate-100">
-                                {recs.slice(0, 3).map((r, i) => {
-                                    const diff = r.sorties - r.avgSorties;
-                                    return (
-                                        <div key={r.crew.id} className={`p-3 sm:p-4 flex items-center gap-3 ${i === 0 ? 'bg-blue-50/50' : ''}`}>
-                                            <span className={`w-7 h-7 rounded-full flex items-center justify-center text-sm font-black ${i === 0 ? 'bg-blue-600 text-white' : 'bg-slate-100 text-slate-500'}`}>{i + 1}</span>
-                                            <div className="flex-1 min-w-0">
-                                                <div className={`font-black leading-tight ${i === 0 ? 'text-lg text-blue-700' : 'text-slate-800'}`}>{r.crew.crewName}</div>
-                                                <div className="text-xs text-slate-500 mt-0.5">
-                                                    {r.sorties} {r.sorties === 1 ? 'sortie' : 'sorties'} ({diff === 0 ? 'at the average' : `${Math.abs(diff).toFixed(1)} ${diff < 0 ? 'below' : 'above'} average`}) · {r.last ? `last flew ${sinceLabel(r.daysSince).toLowerCase()}` : 'never flown'}
-                                                </div>
+                            {recMode === 'overall' ? (
+                                <div className="divide-y divide-slate-100">{recs.slice(0, 3).map((r, i) => <RecRow key={r.crew.id} r={r} i={i} />)}</div>
+                            ) : sorted.length === 0 ? (
+                                <p className="p-6 text-sm text-slate-400 text-center">Create a flying bucket to see recommendations by bucket.</p>
+                            ) : (
+                                <div className="grid grid-cols-1 xl:grid-cols-2 divide-y xl:divide-y-0 divide-slate-100">
+                                    {recsByBucket.map(({ bucket: b, recs: br }) => (
+                                        <div key={b.id} className="xl:border-r xl:border-b border-slate-100">
+                                            <div className="px-4 py-2 flex items-center gap-2 text-sm font-bold text-slate-800" style={{ backgroundColor: b.color + '1a' }}>
+                                                <BucketDot color={b.color} />{b.name}
+                                                <span className="font-mono text-xs text-slate-500 font-semibold ml-auto">{formatMilTime(b.start)}-{formatMilTime(b.end)}</span>
                                             </div>
-                                            <div className="text-right"><div className="text-xl font-black text-slate-800">{r.score}</div><div className="text-[10px] font-bold uppercase tracking-widest text-slate-400">score</div></div>
+                                            <div className="divide-y divide-slate-100">
+                                                {br.slice(0, 3).map((r, i) => <RecRow key={r.crew.id} r={r} i={i} bucketName={b.name} />)}
+                                                {br.length === 0 && <p className="p-4 text-sm text-slate-400">No available crews.</p>}
+                                            </div>
                                         </div>
-                                    );
-                                })}
-                            </div>
+                                    ))}
+                                </div>
+                            )}
                         </div>
                     )}
 
