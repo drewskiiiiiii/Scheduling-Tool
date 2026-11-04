@@ -2185,6 +2185,12 @@
             const [notes, setNotes] = useState(() => cloud ? {} : loadStored('flyfair_notes', {}));
             const [garFlags, setGarFlags] = useState(() => cloud ? {} : loadStored('flyfair_garflags', {}));
             const [doubleFlags, setDoubleFlags] = useState(() => cloud ? {} : loadStored('flyfair_doubles', {}));
+            // Re-render when the date changes so a page left open overnight rolls over to the new "today".
+            const [, setDayTick] = useState(todayStr());
+            useEffect(() => {
+                const id = setInterval(() => setDayTick(todayStr()), 60000);
+                return () => clearInterval(id);
+            }, []);
             const [gar, setGar] = useState(() => cloud ? {} : loadStored('flyfair_gar', buildSeedGar()));
             const [period, setPeriod] = useState(() => { const v = loadStored('flyfair_period', 30); return PERIODS.includes(v) ? v : 30; });
             const [selectedDate, setSelectedDate] = useState(todayStr());
@@ -2380,7 +2386,7 @@
                     const nice = (k) => { const [bk, c] = k.split('|'); return `${crewName(c)} in ${bucketName(bk)}`; };
                     if (added.length) return `Logged ${nice(added[0])}${added.length > 1 ? ` +${added.length - 1} more` : ''} (${date})`;
                     if (removed.length) return `Removed ${nice(removed[0])}${removed.length > 1 ? ` +${removed.length - 1} more` : ''} (${date})`;
-                    return `Updated notes / GAR marks (${date})`;
+                    return `Updated notes / GAR / ×2 marks (${date})`;
                 }
                 return 'Change';
             };
@@ -2501,6 +2507,7 @@
                     if (on) next[key] = true; else delete next[key];
                     return next;
                 });
+                if (on) setDoubleFlags(prev => { if (!prev[key]) return prev; const next = { ...prev }; delete next[key]; return next; }); // a GAR day isn't a flight, so drop a ×2
                 const text = notes[key];
                 if (!on && text && isGarNote(text)) { // older entries marked GAR by typing it in the note: clear that too
                     handleSetNote(date, bucketId, crewId, text.replace(/\bGAR\b/gi, '').replace(/\s{2,}/g, ' ').replace(/^[\s,;:\-–]+|[\s,;:\-–]+$/g, ''));
