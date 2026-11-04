@@ -413,6 +413,7 @@
 
         // A crew marked unavailable (optionally "until" a date, inclusive) is left out of every "next up" / "longest gap" pick.
         const isUnavailable = (crew, asOf) => !!(crew && crew.unavail && (!crew.unavail.until || asOf <= crew.unavail.until));
+        const PartTimeTag = ({ className = '' }) => <span className={`bg-slate-100 text-slate-600 border border-slate-200 text-[10px] uppercase font-bold px-1.5 py-0.5 rounded whitespace-nowrap ${className}`}>Part-time</span>;
         const UnavailTag = ({ className = '' }) => <span className={`bg-amber-50 text-amber-700 border border-amber-200 text-[10px] uppercase font-bold px-1.5 py-0.5 rounded whitespace-nowrap ${className}`}>Unavailable</span>;
 
         const loadStored = (key, fallback) => {
@@ -557,8 +558,9 @@
                 if (!r.last || d > r.last) r.last = d;
             });
             const onToday = new Set(entries.filter(x => x.date === asOf).map(x => x.crewId));
-            return Object.values(byCrew).map(r => ({ ...r, daysSince: r.last ? daysBetween(r.last, asOf) : null, unavailable: isUnavailable(r.crew, asOf) })).sort((a, b) => {
+            return Object.values(byCrew).map(r => ({ ...r, daysSince: r.last ? daysBetween(r.last, asOf) : null, unavailable: isUnavailable(r.crew, asOf), partTime: !!r.crew.partTime })).sort((a, b) => {
                 if (a.unavailable !== b.unavailable) return a.unavailable ? 1 : -1;
+                if (a.partTime !== b.partTime) return a.partTime ? 1 : -1; // part-time crews are never suggested as up next
                 if (!!a.next !== !!b.next) return a.next ? 1 : -1; // crews already scheduled come after those still waiting
                 const ga = onToday.has(a.crew.id) ? 1 : 0;
                 const gb = onToday.has(b.crew.id) ? 1 : 0;
@@ -711,7 +713,7 @@
                             <input type="checkbox" checked={partTime} onChange={e => setPartTime(e.target.checked)} className="w-4 h-4" />
                             Part-time crew
                         </label>
-                        <p className="text-xs text-slate-500">A part-time crew is never suggested under "Recommended to fly next". Their flying is still logged and counted everywhere else.</p>
+                        <p className="text-xs text-slate-500">A part-time crew is never suggested under "Recommended to fly next" or as up next for the GAR. Their flying and GARs are still logged and counted everywhere else.</p>
                     </div>
 
                     <div className="bg-slate-50 p-4 rounded-xl border border-slate-200 space-y-3">
@@ -1151,7 +1153,7 @@
                                     {garRows.map((r, i) => (
                                         <tr key={r.crew.id} className="hover:bg-slate-50/80">
                                             <td className="p-3 text-sm font-bold text-slate-400">{i + 1}</td>
-                                            <td className="p-3 text-sm font-bold text-slate-800">{r.crew.crewName}{r.unavailable && <UnavailTag className="ml-2" />}{i === 0 && !r.unavailable && !r.next && <span className="ml-2 text-xs font-bold text-blue-700 bg-blue-50 border border-blue-200 px-1.5 rounded">Next up</span>}{r.next && <span className="ml-2 text-xs text-slate-500">scheduled {r.next}</span>}</td>
+                                            <td className="p-3 text-sm font-bold text-slate-800">{r.crew.crewName}{r.unavailable && <UnavailTag className="ml-2" />}{r.partTime && <PartTimeTag className="ml-2" />}{i === 0 && !r.unavailable && !r.partTime && !r.next && <span className="ml-2 text-xs font-bold text-blue-700 bg-blue-50 border border-blue-200 px-1.5 rounded">Next up</span>}{r.next && <span className="ml-2 text-xs text-slate-500">scheduled {r.next}</span>}</td>
                                             <td className="p-3 text-sm font-bold text-slate-700">{r.last ? sinceLabel(r.daysSince) : 'No GAR yet'}{r.last && <div className="text-xs text-slate-500 font-mono font-normal">{r.last}</div>}</td>
                                             <td className="p-3">
                                                 <div className="flex items-center gap-2">
@@ -1424,7 +1426,7 @@
             const history = entries;
             const crewMap = Object.fromEntries(crews.map(c => [c.id, c]));
             const onAlert = entries.filter(x => x.date === today).map(x => crewMap[x.crewId].crewName);
-            const nextUp = rotation.find(r => !r.unavailable);
+            const nextUp = rotation.find(r => !r.unavailable && !r.partTime);
             const nextScheduled = upcoming[0];
             const existing = gar[date];
             const maxTotal = Math.max(1, ...rotation.map(r => r.total));
@@ -1488,7 +1490,7 @@
                                                 <td className="p-4 font-black text-slate-800">
                                                     {r.crew.crewName}
                                                     {nextUp && r.crew.id === nextUp.crew.id && <span className="ml-2 bg-blue-600 text-white text-[10px] uppercase font-bold px-2 py-0.5 rounded">Next up</span>}
-                                                    {r.unavailable && <UnavailTag className="ml-2" />}
+                                                    {r.unavailable && <UnavailTag className="ml-2" />}{r.partTime && <PartTimeTag className="ml-2" />}
                                                 </td>
                                                 <td className="p-4">
                                                     <div className={`text-sm font-bold ${r.daysSince === null ? 'text-red-700' : r.daysSince >= 14 ? 'text-amber-700' : 'text-slate-700'}`}>{r.last ? sinceLabel(r.daysSince) : 'Never'}</div>
@@ -1629,7 +1631,7 @@
                 const garRows = crews.map(c => ({ crew: c, value: garInWindow[c.id] || 0, total: totals[c.id] || 0 })).sort((a, b) => b.value - a.value || b.total - a.total || byName(a, b));
                 const rotById = Object.fromEntries(rotation.map(r => [r.crew.id, r]));
                 const glanceRows = stats.map(s => ({ crew: s.crew, last: s.last, daysSince: s.daysSince, sorties: s.sorties, garWin: garInWindow[s.crew.id] || 0, garLast: rotById[s.crew.id].last, garDays: rotById[s.crew.id].daysSince, time30: s.crew.time30, unavailable: s.unavailable }));
-                return { stats, entries, rotation, from, flightNotes, sortieRows, garRows, glanceRows, flyNext: stats.find(r => !r.unavailable), garNext: rotation.find(r => !r.unavailable && !r.next) || rotation.find(r => !r.unavailable), perBucket: sorted.map(b => ({ bucket: b, ...bucketBreakdown(b, stats, crews) })) };
+                return { stats, entries, rotation, from, flightNotes, sortieRows, garRows, glanceRows, flyNext: stats.find(r => !r.unavailable), garNext: rotation.find(r => !r.unavailable && !r.partTime && !r.next) || rotation.find(r => !r.unavailable && !r.partTime), perBucket: sorted.map(b => ({ bucket: b, ...bucketBreakdown(b, stats, crews) })) };
             }, [crews, buckets, log, notes, gar, garFlags, doubleFlags, asOf, period]);
 
             const time30Text = (c) => c.time30 && c.time30.hours !== '' && c.time30.hours != null ? `${c.time30.hours} h${c.time30.asOf ? ` (as of ${c.time30.asOf})` : ''}` : '—';
@@ -1890,7 +1892,7 @@
                                         {data.rotation.map((r, i) => (
                                             <tr key={r.crew.id}>
                                                 <td className="rp-muted">{i + 1}</td>
-                                                <td><strong>{r.crew.crewName}</strong>{data.garNext && data.garNext.crew.id === r.crew.id && <span className="rp-next"> · next up</span>}{r.next && <span className="rp-muted"> · scheduled {r.next}</span>}{r.unavailable && <span className="rp-muted"> · unavailable</span>}</td>
+                                                <td><strong>{r.crew.crewName}</strong>{data.garNext && data.garNext.crew.id === r.crew.id && <span className="rp-next"> · next up</span>}{r.next && <span className="rp-muted"> · scheduled {r.next}</span>}{r.unavailable && <span className="rp-muted"> · unavailable</span>}{r.partTime && <span className="rp-muted"> · part-time</span>}</td>
                                                 <td className={r.last ? '' : 'rp-flag'}>{r.last ? `${r.last} (${sinceLabel(r.daysSince).toLowerCase()})` : 'no GAR yet'}</td>
                                                 <td className="rp-num">{r.total}</td>
                                             </tr>
