@@ -525,7 +525,7 @@
         // Recommendation for who flies next: blends sortie load (fewest in the period) with time since last flew
         // (never = longest). Each is scaled 0-1 across available crews, then averaged 50/50.
         const recommendFlyers = (stats) => {
-            const avail = stats.filter(s => !s.unavailable);
+            const avail = stats.filter(s => !s.unavailable && !s.crew.partTime); // part-time crews are never recommended
             if (!avail.length) return [];
             const sorts = avail.map(s => s.sorties);
             const minS = Math.min(...sorts), maxS = Math.max(...sorts);
@@ -665,6 +665,7 @@
             const [away, setAway] = useState(() => isUnavailable(initialData, todayStr()));
             const [awayReason, setAwayReason] = useState(initialData?.unavail?.reason || '');
             const [awayUntil, setAwayUntil] = useState(initialData?.unavail?.until || '');
+            const [partTime, setPartTime] = useState(!!initialData?.partTime);
 
             const updateMember = (index, field, value) => {
                 setMembers(members.map((m, i) => i === index ? { ...m, [field]: value } : m));
@@ -675,7 +676,7 @@
             const handleSubmit = (e) => {
                 e.preventDefault();
                 // keep everything else stored on the crew (30-day time, order) when editing
-                onSave({ ...(initialData || {}), id: initialData?.id || generateId(), crewName, members, unavail: away ? { reason: awayReason.trim(), until: awayUntil } : undefined });
+                onSave({ ...(initialData || {}), id: initialData?.id || generateId(), crewName, members, unavail: away ? { reason: awayReason.trim(), until: awayUntil } : undefined, partTime: partTime || undefined });
             };
 
             return (
@@ -703,6 +704,14 @@
                                 </div>
                             ))}
                         </div>
+                    </div>
+
+                    <div className="bg-slate-50 p-4 rounded-xl border border-slate-200 space-y-2">
+                        <label className="flex items-center gap-2 text-sm font-bold text-slate-800 cursor-pointer">
+                            <input type="checkbox" checked={partTime} onChange={e => setPartTime(e.target.checked)} className="w-4 h-4" />
+                            Part-time crew
+                        </label>
+                        <p className="text-xs text-slate-500">A part-time crew is never suggested under "Recommended to fly next". Their flying is still logged and counted everywhere else.</p>
                     </div>
 
                     <div className="bg-slate-50 p-4 rounded-xl border border-slate-200 space-y-3">
@@ -886,7 +895,7 @@
                             <div className="p-4 border-b border-slate-200 bg-slate-50 flex flex-col sm:flex-row sm:items-center justify-between gap-2">
                                 <div>
                                     <h3 className="font-bold text-slate-700 uppercase tracking-wider text-sm">Recommended to fly next</h3>
-                                    <p className="text-xs text-slate-500 mt-1">Balances fewest sorties ({periodShort(period)}) with longest time since last flown, 50/50{recMode === 'bucket' ? ', counting only flying in that bucket' : ''}. GAR days are not counted as flying. Unavailable crews are skipped.</p>
+                                    <p className="text-xs text-slate-500 mt-1">Balances fewest sorties ({periodShort(period)}) with longest time since last flown, 50/50{recMode === 'bucket' ? ', counting only flying in that bucket' : ''}. GAR days are not counted as flying. Unavailable and part-time crews are skipped.</p>
                                 </div>
                                 <div className="inline-flex bg-white border border-slate-200 rounded-lg shadow-sm p-1 gap-1 self-start">
                                     {[['bucket', 'By bucket'], ['overall', 'Overall']].map(([k, label]) => (
@@ -2792,6 +2801,12 @@
                                             <td className="p-4 font-black text-slate-800 text-base">
                                                 {crew.crewName}
                                                 {isUnavailable(crew, todayStr()) && <div className="mt-1"><UnavailTag /> <span className="text-xs font-semibold text-slate-500">{[crew.unavail.until && `back ${crew.unavail.until}`, crew.unavail.reason].filter(Boolean).join(' · ')}</span></div>}
+                                                {crew.partTime && <div className="mt-1"><span className="bg-slate-100 text-slate-600 border border-slate-200 text-[10px] uppercase font-bold px-1.5 py-0.5 rounded whitespace-nowrap">Part-time</span></div>}
+                                                {canEdit && (
+                                                    <button onClick={() => handleUpdateCrew(crew.id, { partTime: crew.partTime ? undefined : true })} className="block mt-1 text-xs font-semibold text-slate-400 hover:text-blue-600">
+                                                        {crew.partTime ? 'Make full-time' : 'Mark part-time'}
+                                                    </button>
+                                                )}
                                                 {canEdit && (
                                                     <button onClick={() => handleUpdateCrew(crew.id, { unavail: isUnavailable(crew, todayStr()) ? undefined : { reason: '', until: '' } })} className="block mt-1 text-xs font-semibold text-slate-400 hover:text-blue-600">
                                                         {isUnavailable(crew, todayStr()) ? 'Mark available' : 'Mark unavailable'}
