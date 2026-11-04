@@ -814,6 +814,10 @@
             const t = crew.time30 || { hours: '', asOf: '' };
             const today = todayStr();
             const age = t.asOf ? daysBetween(t.asOf, today) : null;
+            // Keep what is being typed ("12." or "12.0") locally: a number input drops the trailing decimal point.
+            const [draft, setDraft] = useState(String(t.hours ?? ''));
+            const [focused, setFocused] = useState(false);
+            useEffect(() => { if (!focused) setDraft(String(t.hours ?? '')); }, [t.hours, focused]);
             const setField = (field, value) => {
                 const next = { ...t, [field]: value };
                 if (field === 'hours' && value !== '' && !next.asOf) next.asOf = today;
@@ -826,8 +830,14 @@
             }
             return (
                 <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
-                    <input type="number" min="0" step="0.1" inputMode="decimal" value={t.hours} placeholder="hrs"
-                        onChange={e => setField('hours', e.target.value)} aria-label={`${crew.crewName} 30-day hours`}
+                    <input type="text" inputMode="decimal" value={draft} placeholder="hrs"
+                        onFocus={() => setFocused(true)} onBlur={() => setFocused(false)}
+                        onChange={e => {
+                            const v = e.target.value.replace(',', '.');
+                            if (!/^\d*\.?\d*$/.test(v)) return;
+                            setDraft(v);
+                            if (v === '' || /^\d+(\.\d+)?$|^\.\d+$/.test(v)) setField('hours', v);
+                        }} aria-label={`${crew.crewName} 30-day hours`}
                         className="w-20 text-sm font-mono border border-slate-300 rounded-lg px-2 py-1 focus:ring-2 focus:ring-blue-500 outline-none" />
                     <span className="text-xs text-slate-500 font-semibold">as of</span>
                     <input type="date" max={today} value={t.asOf} onChange={e => setField('asOf', e.target.value)} aria-label={`${crew.crewName} 30-day time as-of date`}
