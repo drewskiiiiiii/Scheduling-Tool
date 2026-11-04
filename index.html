@@ -156,6 +156,7 @@
         .rp-sheet .rp-tag.rp-tag-off { background: #94a3b8; }
         .rp-sheet .rp-mini { display: inline-block; height: 12px; border-radius: 3px; vertical-align: middle; margin-right: 6px; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
         .rp-sheet .rp-buckets { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 6px; }
+        .rp-sheet .rp-group td { padding: 14px 0 4px; border-bottom: 1px solid #cbd5e1; font-size: 13px; }
         .rp-sheet .rp-bkt { flex: 1 1 190px; border: 1px solid #cbd5e1; border-radius: 8px; padding: 6px 10px; break-inside: avoid; }
         .rp-sheet .rp-dot { display: inline-block; width: 9px; height: 9px; border-radius: 9px; margin-right: 6px; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
         .rp-sheet .rp-chart { margin-top: 6px; }
@@ -1630,8 +1631,23 @@
                 const sortieRows = stats.map(s => ({ crew: s.crew, value: s.sorties })).sort((a, b) => b.value - a.value || byName(a, b));
                 const garRows = crews.map(c => ({ crew: c, value: garInWindow[c.id] || 0, total: totals[c.id] || 0 })).sort((a, b) => b.value - a.value || b.total - a.total || byName(a, b));
                 const rotById = Object.fromEntries(rotation.map(r => [r.crew.id, r]));
-                const glanceRows = stats.map(s => ({ crew: s.crew, last: s.last, daysSince: s.daysSince, sorties: s.sorties, garWin: garInWindow[s.crew.id] || 0, garLast: rotById[s.crew.id].last, garDays: rotById[s.crew.id].daysSince, time30: s.crew.time30, unavailable: s.unavailable }));
-                return { stats, entries, rotation, from, flightNotes, sortieRows, garRows, glanceRows, flyNext: stats.find(r => !r.unavailable), garNext: rotation.find(r => !r.unavailable && !r.partTime && !r.next) || rotation.find(r => !r.unavailable && !r.partTime), perBucket: sorted.map(b => ({ bucket: b, ...bucketBreakdown(b, stats, crews) })) };
+                // Crews grouped by the bucket they're assigned to (a crew in several buckets appears in each); crews with no bucket go in "Flexible".
+                const mkRow = (s, bucket) => ({
+                    crew: s.crew, unavailable: s.unavailable, partTime: !!s.crew.partTime,
+                    last: bucket ? (s.lastByBucket[bucket.id] || null) : s.last,
+                    daysSince: bucket ? (s.daysSinceByBucket[bucket.id] ?? null) : s.daysSince,
+                    sorties: bucket ? (s.perBucket[bucket.id] || 0) : s.sorties,
+                    garWin: garInWindow[s.crew.id] || 0, garLast: rotById[s.crew.id].last, garDays: rotById[s.crew.id].daysSince
+                });
+                const assignedAny = new Set();
+                sorted.forEach(bk => designatedIds(bk, crews).forEach(id => assignedAny.add(id)));
+                const groups = sorted.filter(bk => designatedIds(bk, crews).length).map(bk => {
+                    const bb = bucketBreakdown(bk, stats, crews);
+                    return { key: bk.id, name: bk.name, color: bk.color, time: `${formatMilTime(bk.start)}–${formatMilTime(bk.end)}Z`, bucket: bk, rows: bb.rows.map(r => mkRow(r, bk)), outsiders: bb.outsiders, avg: bb.avg };
+                });
+                const flexRows = stats.filter(s => !assignedAny.has(s.crew.id)).map(s => mkRow(s, null));
+                if (flexRows.length) groups.push({ key: 'flexible', name: 'Flexible', color: '#94a3b8', time: 'not assigned to a bucket', bucket: null, rows: flexRows, outsiders: [], avg: flexRows.reduce((a, r) => a + r.sorties, 0) / flexRows.length });
+                return { stats, entries, rotation, from, flightNotes, sortieRows, garRows, groups };
             }, [crews, buckets, log, notes, gar, garFlags, doubleFlags, asOf, period]);
 
             const time30Text = (c) => c.time30 && c.time30.hours !== '' && c.time30.hours != null ? `${c.time30.hours} h${c.time30.asOf ? ` (as of ${c.time30.asOf})` : ''}` : '—';
@@ -1642,18 +1658,11 @@
                 if (view === 'glance') {
                     L.push(`${title.toUpperCase()}`, `As of ${prettyDate(asOf)} · ${periodLong(period)}`);
                     if (message.trim()) L.push('', message.trim());
-                    L.push('');
-                    if (data.flyNext) L.push(`FLY NEXT: ${data.flyNext.crew.crewName} (${data.flyNext.last ? `last flew ${sinceLabel(data.flyNext.daysSince).toLowerCase()}` : 'has not flown'})`);
-                    if (data.garNext) L.push(`GAR NEXT: ${data.garNext.crew.crewName} (${data.garNext.last ? `last GAR ${sinceLabel(data.garNext.daysSince).toLowerCase()}` : 'no GAR yet'})`);
-                    if (data.perBucket.length) {
-                        L.push('', 'NEXT UP BY BUCKET');
-                        data.perBucket.forEach(({ bucket, rows }) => {
-                            const n = rows.find(r => !r.unavailable);
-                            L.push(`${bucket.name} (${formatMilTime(bucket.start)}-${formatMilTime(bucket.end)}Z): ${n ? `${n.crew.crewName} — ${n.daysSinceByBucket[bucket.id] === undefined ? 'never in this bucket' : `last in bucket ${sinceLabel(n.daysSinceByBucket[bucket.id]).toLowerCase()}`}` : '—'}`);
-                        });
-                    }
-                    L.push('', `CREW · LAST FLOWN · SORTIES · GARs${inc.time30 ? ' · 30-DAY HOURS' : ''}`);
-                    data.glanceRows.forEach((r, i) => L.push(`${i + 1}. ${r.crew.crewName} · ${r.last ? sinceLabel(r.daysSince).toLowerCase() : 'never'} · ${r.sorties} · ${r.garWin}${inc.time30 ? ` · ${time30Text(r.crew)}` : ''}`));
+                    data.groups.forEach(g => {
+                        L.push('', `${g.name.toUpperCase()} (${g.time}) · LAST FLOWN · SORTIES · GARs${inc.time30 ? ' · 30-DAY HOURS' : ''}`);
+                        g.rows.forEach((r, i) => L.push(`${i + 1}. ${r.crew.crewName} · ${r.last ? sinceLabel(r.daysSince).toLowerCase() : 'never'} · ${r.sorties} · ${r.garWin}${inc.time30 ? ` · ${time30Text(r.crew)}` : ''}`));
+                    });
+                    L.push('', `Note: ${TASKING_NOTE}`);
                     return L.join('\n');
                 }
                 L.push(`${title.toUpperCase()}`);
@@ -1673,14 +1682,14 @@
                     data.garRows.forEach(r => L.push(`${r.crew.crewName}  ${bar(r.value, gMax)} ${r.value} (${r.total})`));
                 }
                 if (inc.buckets) {
-                    L.push('', 'BY BUCKET — longest gap in that bucket first');
-                    data.perBucket.forEach(({ bucket, rows, avg }) => {
-                        L.push(`${bucket.name} (${formatMilTime(bucket.start)}-${formatMilTime(bucket.end)}Z), avg ${avg.toFixed(1)}:`);
-                        rows.forEach((r, i) => L.push(`  ${i + 1}. ${r.crew.crewName}: ${r.lastByBucket[bucket.id] ? `last ${r.lastByBucket[bucket.id]} (${sinceLabel(r.daysSinceByBucket[bucket.id]).toLowerCase()})` : 'never in this bucket'} · ${r.perBucket[bucket.id] || 0}`));
+                    L.push('', 'BY BUCKET');
+                    data.groups.forEach(g => {
+                        L.push(`${g.name} (${g.time}), avg ${g.avg.toFixed(1)}:`);
+                        g.rows.forEach((r, i) => L.push(`  ${i + 1}. ${r.crew.crewName}: ${r.last ? `last ${r.last} (${sinceLabel(r.daysSince).toLowerCase()})` : (g.bucket ? 'never in this bucket' : 'never flown')} · ${r.sorties}`));
                     });
                 }
                 if (inc.gar) {
-                    L.push('', 'GAR — up-next order');
+                    L.push('', 'GAR order');
                     data.rotation.forEach((r, i) => L.push(`${i + 1}. ${r.crew.crewName}: ${r.last ? `last GAR ${r.last} (${sinceLabel(r.daysSince).toLowerCase()})` : 'no GAR yet'} · ${r.total} total${r.next ? ` · scheduled ${r.next}` : ''}`));
                 }
                 if (inc.garHistory && data.entries.length) {
@@ -1711,7 +1720,7 @@
 
             const options = [
                 ['flying', 'Flying summary'], ['time30', '30-day time'], ['buckets', 'Per-bucket breakdown'],
-                ['gar', 'GAR up-next order'], ['garHistory', 'Recent GARs'], ['charts', 'Charts'], ['notes', 'Flying log notes']
+                ['gar', 'GAR order'], ['garHistory', 'Recent GARs'], ['charts', 'Charts'], ['notes', 'Flying log notes']
             ];
 
             return (
@@ -1777,55 +1786,30 @@
 
                         {view === 'glance' && (
                             <>
-                                <div className="rp-hero">
-                                    <div>
-                                        <div className="rp-kicker">Fly next</div>
-                                        <div className="rp-big">{data.flyNext ? data.flyNext.crew.crewName : '—'}</div>
-                                        <div className="rp-muted">{data.flyNext ? (data.flyNext.last ? `last flew ${sinceLabel(data.flyNext.daysSince).toLowerCase()}` : 'has not flown yet') : ''}</div>
-                                    </div>
-                                    <div>
-                                        <div className="rp-kicker">GAR next</div>
-                                        <div className="rp-big">{data.garNext ? data.garNext.crew.crewName : '—'}</div>
-                                        <div className="rp-muted">{data.garNext ? (data.garNext.last ? `last GAR ${sinceLabel(data.garNext.daysSince).toLowerCase()}` : 'no GAR yet') : ''}</div>
-                                    </div>
-                                </div>
-                                {data.perBucket.length > 0 && (
-                                    <div style={{ marginTop: 14 }}>
-                                        <div className="rp-kicker" style={{ fontSize: 11, fontWeight: 800, letterSpacing: '.08em', textTransform: 'uppercase', color: '#475569' }}>Next up by bucket</div>
-                                        <div className="rp-buckets">
-                                            {data.perBucket.map(({ bucket, rows }) => {
-                                                const n = rows.find(r => !r.unavailable);
-                                                const d = n ? n.daysSinceByBucket[bucket.id] : undefined;
-                                                return (
-                                                    <div key={bucket.id} className="rp-bkt">
-                                                        <div><span className="rp-dot" style={{ background: bucket.color }}></span><strong>{bucket.name}</strong> <span className="rp-muted">{formatMilTime(bucket.start)}–{formatMilTime(bucket.end)}Z</span></div>
-                                                        <div style={{ fontWeight: 700 }}>{n ? n.crew.crewName : '—'}</div>
-                                                        {n && <div className="rp-muted" style={{ fontSize: 12 }}>{d === undefined ? 'never in this bucket' : `last in bucket ${sinceLabel(d).toLowerCase()}`}</div>}
-                                                    </div>
-                                                );
-                                            })}
-                                        </div>
-                                    </div>
-                                )}
-                                <table className="rp-glance" style={{ marginTop: 18 }}>
+                                <table className="rp-glance" style={{ marginTop: 14 }}>
                                     <thead><tr><th>Crew</th><th>Last flown</th><th>Sorties ({periodShort(period)})</th><th>GARs ({periodShort(period)})</th>{inc.time30 && <th>30-day hours</th>}</tr></thead>
-                                    <tbody>
-                                        {data.glanceRows.map((r, i) => {
-                                            const sMax = Math.max(1, ...data.glanceRows.map(x => x.sorties));
-                                            const tone = r.daysSince === null || r.daysSince >= 14 ? 'rp-red' : r.daysSince >= 7 ? 'rp-amber' : 'rp-green';
-                                            return (
-                                                <tr key={r.crew.id}>
-                                                    <td><strong>{r.crew.crewName}</strong>{data.flyNext && data.flyNext.crew.id === r.crew.id && <span className="rp-tag">FLY NEXT</span>}{r.unavailable && <span className="rp-tag rp-tag-off">UNAVAILABLE</span>}{data.garNext && data.garNext.crew.id === r.crew.id && <span className="rp-tag rp-tag-gar">GAR NEXT</span>}</td>
-                                                    <td><span className={`rp-pill ${tone}`}>{r.last ? sinceLabel(r.daysSince) : 'Never'}</span></td>
-                                                    <td><span className="rp-mini" style={{ width: `${(r.sorties / sMax) * 80}px`, minWidth: r.sorties ? 4 : 0, background: '#2563eb' }}></span><strong>{r.sorties}</strong></td>
-                                                    <td><strong>{r.garWin}</strong>{r.garLast ? <span className="rp-muted"> · last {sinceLabel(r.garDays).toLowerCase()}</span> : <span className="rp-muted"> · none yet</span>}</td>
-                                                    {inc.time30 && <td>{time30Text(r.crew)}</td>}
-                                                </tr>
-                                            );
-                                        })}
-                                    </tbody>
+                                    {data.groups.map(g => {
+                                        const sMax = Math.max(1, ...g.rows.map(x => x.sorties));
+                                        return (
+                                            <tbody key={g.key} style={{ breakInside: 'avoid' }}>
+                                                <tr className="rp-group"><td colSpan={inc.time30 ? 5 : 4}><span className="rp-dot" style={{ background: g.color }}></span><strong>{g.name}</strong> <span className="rp-muted">{g.time}{g.bucket ? ' · last flown and sorties are in this bucket' : ''}</span></td></tr>
+                                                {g.rows.map(r => {
+                                                    const tone = r.daysSince === null || r.daysSince >= 14 ? 'rp-red' : r.daysSince >= 7 ? 'rp-amber' : 'rp-green';
+                                                    return (
+                                                        <tr key={r.crew.id}>
+                                                            <td><strong>{r.crew.crewName}</strong>{r.unavailable && <span className="rp-tag rp-tag-off">UNAVAILABLE</span>}{r.partTime && <span className="rp-tag rp-tag-off">PART-TIME</span>}</td>
+                                                            <td><span className={`rp-pill ${tone}`}>{r.last ? sinceLabel(r.daysSince) : 'Never'}</span></td>
+                                                            <td><span className="rp-mini" style={{ width: `${(r.sorties / sMax) * 80}px`, minWidth: r.sorties ? 4 : 0, background: '#2563eb' }}></span><strong>{r.sorties}</strong></td>
+                                                            <td><strong>{r.garWin}</strong>{r.garLast ? <span className="rp-muted"> · last {sinceLabel(r.garDays).toLowerCase()}</span> : <span className="rp-muted"> · none yet</span>}</td>
+                                                            {inc.time30 && <td>{time30Text(r.crew)}</td>}
+                                                        </tr>
+                                                    );
+                                                })}
+                                            </tbody>
+                                        );
+                                    })}
                                 </table>
-                                <div className="rp-muted" style={{ marginTop: 8, fontSize: 12 }}>Fly next = longest since last flight. GAR next = longest since last ground alert. <span className="rp-pill rp-green">under 7 days</span> <span className="rp-pill rp-amber">7–13 days</span> <span className="rp-pill rp-red">14+ days or never</span></div>
+                                <div className="rp-muted" style={{ marginTop: 8, fontSize: 12 }}>Crews are grouped by their assigned flying bucket; crews with no bucket are listed as Flexible. <span className="rp-pill rp-green">under 7 days</span> <span className="rp-pill rp-amber">7–13 days</span> <span className="rp-pill rp-red">14+ days or never</span></div>
                             </>
                         )}
 
@@ -1859,26 +1843,26 @@
                             </>
                         )}
 
-                        {inc.buckets && data.perBucket.length > 0 && (
+                        {inc.buckets && data.groups.length > 0 && (
                             <>
-                                <h2>By bucket — longest gap in that bucket first</h2>
-                                {data.perBucket.map(({ bucket, rows, avg, designated, outsiders }) => (
-                                    <div key={bucket.id} style={{ breakInside: 'avoid' }}>
-                                        <h3><span style={{ display: 'inline-block', width: 9, height: 9, borderRadius: 9, background: bucket.color, marginRight: 6 }}></span>{bucket.name} <span className="rp-muted" style={{ fontWeight: 400 }}>{formatMilTime(bucket.start)}–{formatMilTime(bucket.end)}Z · {designated.length ? `${designated.length} assigned crews` : 'all crews'} · avg {avg.toFixed(1)}</span></h3>
+                                <h2>By bucket</h2>
+                                {data.groups.map(g => (
+                                    <div key={g.key} style={{ breakInside: 'avoid' }}>
+                                        <h3><span style={{ display: 'inline-block', width: 9, height: 9, borderRadius: 9, background: g.color, marginRight: 6 }}></span>{g.name} <span className="rp-muted" style={{ fontWeight: 400 }}>{g.time} · {g.rows.length} {g.rows.length === 1 ? 'crew' : 'crews'} · avg {g.avg.toFixed(1)}</span></h3>
                                         <table style={{ tableLayout: 'fixed' }}>
                                             <colgroup><col style={{ width: 28 }} /><col style={{ width: '38%' }} /><col /><col style={{ width: 50 }} /></colgroup>
                                             <tbody>
-                                                {rows.map((r, i) => (
+                                                {g.rows.map((r, i) => (
                                                     <tr key={r.crew.id}>
                                                         <td className="rp-muted" style={{ width: 24 }}>{i + 1}</td>
                                                         <td><strong>{r.crew.crewName}</strong></td>
-                                                        <td className={r.lastByBucket[bucket.id] ? '' : 'rp-flag'}>{r.lastByBucket[bucket.id] ? `${r.lastByBucket[bucket.id]} (${sinceLabel(r.daysSinceByBucket[bucket.id]).toLowerCase()})` : 'never in this bucket'}</td>
-                                                        <td className="rp-num">{r.perBucket[bucket.id] || 0}</td>
+                                                        <td className={r.last ? '' : 'rp-flag'}>{r.last ? `${r.last} (${sinceLabel(r.daysSince).toLowerCase()})` : (g.bucket ? 'never in this bucket' : 'never flown')}</td>
+                                                        <td className="rp-num">{r.sorties}</td>
                                                     </tr>
                                                 ))}
                                             </tbody>
                                         </table>
-                                        {outsiders.length > 0 && <div className="rp-muted" style={{ marginTop: 3 }}>Also flew here, not assigned: {outsiders.map(r => `${r.crew.crewName} (${r.perBucket[bucket.id]})`).join(', ')}</div>}
+                                        {g.outsiders.length > 0 && <div className="rp-muted" style={{ marginTop: 3 }}>Also flew here, not assigned: {g.outsiders.map(r => `${r.crew.crewName} (${r.perBucket[g.bucket.id]})`).join(', ')}</div>}
                                     </div>
                                 ))}
                             </>
@@ -1886,14 +1870,14 @@
 
                         {inc.gar && (
                             <>
-                                <h2>GAR — up-next order</h2>
+                                <h2>GAR order</h2>
                                 <table>
                                     <thead><tr><th>#</th><th>Crew</th><th>Last GAR</th><th className="rp-num">Total</th></tr></thead>
                                     <tbody>
                                         {data.rotation.map((r, i) => (
                                             <tr key={r.crew.id}>
                                                 <td className="rp-muted">{i + 1}</td>
-                                                <td><strong>{r.crew.crewName}</strong>{data.garNext && data.garNext.crew.id === r.crew.id && <span className="rp-next"> · next up</span>}{r.next && <span className="rp-muted"> · scheduled {r.next}</span>}{r.unavailable && <span className="rp-muted"> · unavailable</span>}{r.partTime && <span className="rp-muted"> · part-time</span>}</td>
+                                                <td><strong>{r.crew.crewName}</strong>{r.next && <span className="rp-muted"> · scheduled {r.next}</span>}{r.unavailable && <span className="rp-muted"> · unavailable</span>}{r.partTime && <span className="rp-muted"> · part-time</span>}</td>
                                                 <td className={r.last ? '' : 'rp-flag'}>{r.last ? `${r.last} (${sinceLabel(r.daysSince).toLowerCase()})` : 'no GAR yet'}</td>
                                                 <td className="rp-num">{r.total}</td>
                                             </tr>
